@@ -21,6 +21,9 @@ struct Token {
     int len;        // Token length
 };
 
+// Input string
+static char *current_input;
+
 // Reports an error and exit.
 static void error(char *fmt, ...) {
     va_list ap;
@@ -28,6 +31,29 @@ static void error(char *fmt, ...) {
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     exit(1);
+}
+
+// Reports an error location and exit.
+static void verror_at(char *loc, char *fmt, va_list ap) {
+    int pos = loc - current_input;
+    fprintf(stderr, "%s\n", current_input);
+    fprintf(stderr, "%*s", pos, ""); // print pos spaces.
+    fprintf(stderr, "^ ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    exit(1);
+}
+
+static void error_at(char *loc, char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(loc, fmt, ap);
+}
+
+static void error_tok(Token *tok, char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(tok->loc, fmt, ap);
 }
 
 // Consumes the current token if it matches `s`.
@@ -39,7 +65,7 @@ static bool equal(Token *tok, char *s) {
 // Ensure that the current token is `s`.
 static Token *skip(Token *tok, char *s) {
     if (!equal(tok, s))
-        error("expected '%s'", s);
+        error_tok(tok, "expected a number");
     return tok->next;
 }
 
@@ -60,8 +86,9 @@ static Token *new_token(TokenKind kind, Token *cur, char *str, int len) {
     return tok;
 }
 
-// Tokenize `p` and returns new tokens.
-static Token *tokenize(char *p) {
+// Tokenize `current_input` and returns new tokens.
+static Token *tokenize(void) {
+    char *p = current_input;
     Token head = {};
     Token *cur = &head;
 
@@ -87,7 +114,7 @@ static Token *tokenize(char *p) {
             continue;
         }
 
-        error("invalid token");
+        error_at(p, "invalid token");
     }
 
     new_token(TK_EOF, cur, p, 0);
@@ -98,7 +125,8 @@ int main(int argc, char **argv) {
     if (argc != 2)
         error("%s: invalid number of arguments", argv[0]);
     
-    Token *tok = tokenize(argv[1]);
+    current_input = argv[1];
+    Token *tok = tokenize();
 
     printf(".intel_syntax noprefix\n");
     printf(".globl main\n");
@@ -120,7 +148,7 @@ int main(int argc, char **argv) {
         printf("  sub rax, %ld\n", get_number(tok));
         tok = tok->next;
     }
-    
+
     printf("  ret\n");
     return 0;
 }
