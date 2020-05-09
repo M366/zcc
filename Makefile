@@ -1,12 +1,21 @@
 CFLAGS=-std=c11 -g -static -fno-common
+SRCS=$(wildcard *.c)
+OBJS=$(SRCS:.c=.o)
 
-chibicc: main.o
-	$(CC) -o $@ $? $(LDFLAGS)
+zcc: $(OBJS)
+	$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
-test: chibicc
+$(OBJS): zcc.h
+
+/tmp/tmpfs:
+	mkdir -p /tmp/tmpfs
+
+test: zcc /tmp/tmpfs
 	./test.sh
 
 clean:
-	rm -f chibicc *.o *~ tmp*
+	rm -f zcc *.o *~ tmp*
+	rm -rf /tmp/tmpfs/*
 
 .PHONY: test clean
+

@@ -1,16 +1,12 @@
-#include <stdio.h>
-#include <stdlib.h>
+#include "zcc.h"
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr, "%s: invalid number of arguments\n", argv[0]);
-        return 1;
-    }
-
-    printf(".intel_syntax noprefix\n");
-    printf(".globl main\n");
-    printf("main:\n");
-    printf("  mov rax, %d\n",atoi(argv[1]));
-    printf("  ret\n");
+    if (argc != 2)
+        error("%s: invalid number of arguments", argv[0]);
+    
+    Token *tok = tokenize(argv[1]);
+    Node *node = parse(tok);
+    codegen(node);
     return 0;
 }
+
