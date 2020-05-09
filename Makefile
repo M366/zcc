@@ -1,12 +1,13 @@
 CFLAGS=-std=c11 -g -static -fno-common
 
-chibicc: main.o
+zcc: main.o
 	$(CC) -o $@ $? $(LDFLAGS)
 
-test: chibicc
+test: zcc
 	./test.sh
 
 clean:
-	rm -f chibicc *.o *~ tmp*
+	rm -f zcc *.o *~ tmp*
 
 .PHONY: test clean
+

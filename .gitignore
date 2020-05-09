@@ -3,4 +3,5 @@
 **/*.o
 **/a.out
 tmp*
-chibicc
+zcc
+.DS_Store
