@@ -21,6 +21,12 @@ static Node *new_binary(NodeKind kind, Node *lhs, Node *rhs) {
     return node;
 }
 
+static Node *new_unary(NodeKind kind, Node *expr) {
+    Node *node = new_node(kind);
+    node->lhs = expr;
+    return node;
+}
+
 static Node *new_num(long val) {
     Node *node = new_node(ND_NUM);
     node->val = val;
@@ -31,6 +37,13 @@ static long get_number(Token *tok) {
     if (tok->kind != TK_NUM)
         error_tok(tok, "expected a number");
     return tok->val;
+}
+
+// stmt = expr ";"
+static Node *stmt(Token **rest, Token *tok) {
+    Node *node = new_unary(ND_EXPR_STMT, expr(&tok, tok));
+    *rest = skip(tok, ";");
+    return node;
 }
 
 // expr = equality
@@ -163,9 +176,11 @@ static Node *primary(Token **rest, Token *tok) {
     return node;
 }
 
+// program = stmt*
 Node *parse(Token *tok) {
-    Node *node = expr(&tok, tok);
-    if (tok->kind != TK_EOF)
-        error_tok(tok, "extra token");
-    return node;
+    Node head = {};
+    Node *cur = &head;
+    while (tok->kind != TK_EOF)
+        cur = cur->next = stmt(&tok, tok);
+    return head.next;
 }

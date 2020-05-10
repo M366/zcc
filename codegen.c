@@ -63,6 +63,17 @@ static void gen_expr(Node *node) {
     }
 }
 
+static void gen_stmt(Node *node) {
+    switch (node->kind) {
+    case ND_EXPR_STMT:
+        gen_expr(node->lhs);
+        printf("  mov rax, %s\n", reg(--top));
+        return;
+    default:
+        error("invalid statement");
+    }
+}
+
 void codegen(Node *node) {
     printf(".intel_syntax noprefix\n");
     printf(".globl main\n");
@@ -74,11 +85,10 @@ void codegen(Node *node) {
     printf("  push r14\n");
     printf("  push r15\n");
     
-    gen_expr(node);
-
-    // Set the result of the expression to RAX so that
-    // the result becomes a return value of this function.
-    printf("  mov rax, %s\n", reg(top - 1));
+    for (Node *n = node; n; n = n->next) {
+        gen_stmt(n);
+        assert(top == 0);
+    }
 
     printf("  pop r15\n");
     printf("  pop r14\n");
