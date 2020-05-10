@@ -73,7 +73,6 @@ static bool is_alnum(char c) {
 // Tokenize a given string and returns new tokens.
 Token *tokenize(char *p) {
     current_input = p;
-
     Token head = {};
     Token *cur = &head;
 
@@ -97,6 +96,12 @@ Token *tokenize(char *p) {
         if (startswith(p, "return")) {
             cur = new_token(TK_RESERVED, cur, p, 6);
             p += 6;
+            continue;
+        }
+
+        // Identifier
+        if ('a' <= *p && *p <= 'z') {
+            cur = new_token(TK_IDENT, cur, p++, 1);
             continue;
         }
 
