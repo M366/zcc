@@ -82,7 +82,7 @@ static bool is_keyword(Token *tok) {
 static void convert_keywords(Token *tok) {
     for (Token *t = tok; t->kind != TK_EOF; t = t->next)
         if (t->kind == TK_IDENT && is_keyword(t))
-            t->kind == TK_RESERVED;
+            t->kind = TK_RESERVED;
 }
 
 // Tokenize a given string and returns new tokens.
