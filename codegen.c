@@ -1,6 +1,7 @@
 #include "zcc.h"
 
 static int top;
+static int labelseq = 1;
 
 static char *reg(int idx) {
     static char *r[] = {"r10", "r11", "r12", "r13", "r14", "r15"};
@@ -12,9 +13,7 @@ static char *reg(int idx) {
 // Pushes the given node's addres to the stack.
 static void gen_addr(Node *node) {
     if (node->kind == ND_VAR) {
-        int offset = (node->name - 'a' + 1) * 8;
-        offset += 32; // for callee-saved registors
-        printf("  lea %s, [rbp-%d]\n", reg(top++), offset);
+        printf("  lea %s, [rbp-%d]\n", reg(top++), node->var->offset);
         return;
     }
 
@@ -97,6 +96,26 @@ static void gen_expr(Node *node) {
 
 static void gen_stmt(Node *node) {
     switch (node->kind) {
+    case ND_IF: {
+        int seq = labelseq++;
+        if (node->els) {
+            gen_expr(node->cond);
+            printf("  cmp %s, 0\n", reg(--top));
+            printf("  je .L.else.%d\n", seq);
+            gen_stmt(node->then);
+            printf("  jmp .L.end.%d\n", seq);
+            printf(".L.else.%d:\n", seq);
+            gen_stmt(node->els);
+            printf(".L.end.%d:\n", seq);
+        } else {
+            gen_expr(node->cond);
+            printf("  cmp %s, 0\n", reg(--top));
+            printf("  je .L.end.%d\n", seq);
+            gen_stmt(node->then);
+            printf(".L.end.%d:\n", seq);
+        }
+        return;
+    }
     case ND_RETURN:
         gen_expr(node->lhs);
         printf("  mov rax, %s\n", reg(--top));
@@ -111,7 +130,7 @@ static void gen_stmt(Node *node) {
     }
 }
 
-void codegen(Node *node) {
+void codegen(Function *prog) {
     printf(".intel_syntax noprefix\n");
     printf(".globl main\n");
     printf("main:\n");
@@ -119,13 +138,13 @@ void codegen(Node *node) {
     // Prologue. r12-15 are callee-saved registers.
     printf("  push rbp\n");
     printf("  mov rbp, rsp\n");
-    printf("  sub rsp, 240\n");
+    printf("  sub rsp, %d\n", prog->stack_size);
     printf("  mov [rbp-8], r12\n");
     printf("  mov [rbp-16], r13\n");
     printf("  mov [rbp-24], r14\n");
     printf("  mov [rbp-32], r15\n");
     
-    for (Node *n = node; n; n = n->next) {
+    for (Node *n = prog->node; n; n = n->next) {
         gen_stmt(n);
         assert(top == 0);
     }

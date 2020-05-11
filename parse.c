@@ -1,5 +1,9 @@
 #include "zcc.h"
 
+// All local variable instatnces created during parsing are
+// accumulated to this list.
+Var *locals;
+
 static Node *expr(Token **rest, Token *tok);
 static Node *assign(Token **rest, Token *tok);
 static Node *equality(Token **rest, Token *tok);
@@ -8,6 +12,14 @@ static Node *add(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
+
+// Find a local variable by name.
+static Var *find_var(Token *tok) {
+    for (Var *var = locals; var; var = var->next)
+        if (strlen(var->name) == tok->len && !strncmp(tok->loc, var->name, tok->len))
+            return var;
+    return NULL;
+}
 
 static Node *new_node(NodeKind kind) {
     Node *node = calloc(1, sizeof(Node));
@@ -34,10 +46,18 @@ static Node *new_num(long val) {
     return node;
 }
 
-static Node *new_var_node(char name) {
+static Node *new_var_node(Var *var) {
     Node *node = new_node(ND_VAR);
-    node->name = name;
+    node->var = var;
     return node;
+}
+
+static Var *new_lvar(char *name) {
+    Var *var = calloc(1, sizeof(Var));
+    var->name = name;
+    var->next = locals;
+    locals = var;
+    return var;
 }
 
 static long get_number(Token *tok) {
@@ -47,15 +67,28 @@ static long get_number(Token *tok) {
 }
 
 // stmt = "return" expr ";"
+//      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | expr ";"
 static Node *stmt(Token **rest, Token *tok) {
-    Node *node;
+    if (equal(tok, "return")) {
+        Node *node = new_unary(ND_RETURN, expr(&tok, tok->next));
+        *rest = skip(tok, ";");
+        return node;
+    }
 
-    if (equal(tok, "return"))
-        node = new_unary(ND_RETURN, expr(&tok, tok->next));
-    else
-        node = new_unary(ND_EXPR_STMT, expr(&tok, tok));
+    if (equal(tok, "if")) {
+        Node *node = new_node(ND_IF);
+        tok = skip(tok->next, "(");
+        node->cond = expr(&tok, tok);
+        tok = skip(tok, ")");
+        node->then = stmt(&tok, tok);
+        if (equal(tok, "else"))
+            node->els = stmt(&tok, tok);
+        *rest = tok;
+        return node;
+    }
 
+    Node *node = new_unary(ND_EXPR_STMT, expr(&tok, tok));
     *rest = skip(tok, ";");
     return node;
 }
@@ -194,21 +227,29 @@ static Node *primary(Token **rest, Token *tok) {
         return node;
     }
 
-    Node *node;
-    if (tok->kind == TK_IDENT)
-        node = new_var_node(*tok->loc);
-    else
-        node = new_num(get_number(tok));
+    if (tok->kind == TK_IDENT) {
+        Var *var = find_var(tok);
+        if (!var)
+            var = new_lvar(strndup(tok->loc, tok->len));
+        *rest = tok->next;
+        return new_var_node(var);
+    }
 
+    Node *node = new_num(get_number(tok));
     *rest = tok->next;
     return node;
 }
 
 // program = stmt*
-Node *parse(Token *tok) {
+Function *parse(Token *tok) {
     Node head = {};
     Node *cur = &head;
+
     while (tok->kind != TK_EOF)
         cur = cur->next = stmt(&tok, tok);
-    return head.next;
+    
+    Function *prog = calloc(1, sizeof(Function));
+    prog->node = head.next;
+    prog->locals = locals;
+    return prog;
 }
