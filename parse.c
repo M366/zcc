@@ -1,6 +1,6 @@
 #include "zcc.h"
 
-// All local variable instatnces created during parsing are
+// All local variable instances created during parsing are
 // accumulated to this list.
 Var *locals;
 
@@ -68,6 +68,7 @@ static long get_number(Token *tok) {
 
 // stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
+//      | "for" "(" expr? ";" expr? ";" expr? ")" stmt
 //      | expr ";"
 static Node *stmt(Token **rest, Token *tok) {
     if (equal(tok, "return")) {
@@ -83,8 +84,28 @@ static Node *stmt(Token **rest, Token *tok) {
         tok = skip(tok, ")");
         node->then = stmt(&tok, tok);
         if (equal(tok, "else"))
-            node->els = stmt(&tok, tok);
+            node->els = stmt(&tok, tok->next);
         *rest = tok;
+        return node;
+    }
+
+    if (equal(tok, "for")) {
+        Node *node = new_node(ND_FOR);
+        tok = skip(tok->next, "(");
+
+        if (!equal(tok, ";"))
+            node->init = new_unary(ND_EXPR_STMT, expr(&tok, tok));
+        tok = skip(tok, ";");
+
+        if (!equal(tok, ";"))
+            node->cond = expr(&tok, tok);
+        tok = skip(tok, ";");
+
+        if (!equal(tok, ")"))
+            node->inc = new_unary(ND_EXPR_STMT, expr(&tok, tok));
+        tok = skip(tok, ")");
+
+        node->then = stmt(rest, tok);
         return node;
     }
 

@@ -10,7 +10,7 @@ static char *reg(int idx) {
     return r[idx];
 }
 
-// Pushes the given node's addres to the stack.
+// Pushes the given node's address to the stack.
 static void gen_addr(Node *node) {
     if (node->kind == ND_VAR) {
         printf("  lea %s, [rbp-%d]\n", reg(top++), node->var->offset);
@@ -72,22 +72,22 @@ static void gen_expr(Node *node) {
     case ND_EQ:
         printf("  cmp %s, %s\n", rd, rs);
         printf("  sete al\n");
-        printf("  movzb %s, al\n", rd);
+        printf("  movzx %s, al\n", rd);
         return;
     case ND_NE:
         printf("  cmp %s, %s\n", rd, rs);
         printf("  setne al\n");
-        printf("  movzb %s, al\n", rd);
+        printf("  movzx %s, al\n", rd);
         return;
     case ND_LT:
         printf("  cmp %s, %s\n", rd, rs);
         printf("  setl al\n");
-        printf("  movzb %s, al\n", rd);
+        printf("  movzx %s, al\n", rd);
         return;
     case ND_LE:
         printf("  cmp %s, %s\n", rd, rs);
         printf("  setle al\n");
-        printf("  movzb %s, al\n", rd);
+        printf("  movzx %s, al\n", rd);
         return;
     default:
         error("invalid expression");
@@ -101,7 +101,7 @@ static void gen_stmt(Node *node) {
         if (node->els) {
             gen_expr(node->cond);
             printf("  cmp %s, 0\n", reg(--top));
-            printf("  je .L.else.%d\n", seq);
+            printf("  je  .L.else.%d\n", seq);
             gen_stmt(node->then);
             printf("  jmp .L.end.%d\n", seq);
             printf(".L.else.%d:\n", seq);
@@ -110,10 +110,27 @@ static void gen_stmt(Node *node) {
         } else {
             gen_expr(node->cond);
             printf("  cmp %s, 0\n", reg(--top));
-            printf("  je .L.end.%d\n", seq);
+            printf("  je  .L.end.%d\n", seq);
             gen_stmt(node->then);
             printf(".L.end.%d:\n", seq);
         }
+        return;
+    }
+    case ND_FOR: {
+        int seq = labelseq++;
+        if (node->init)
+            gen_stmt(node->init);
+        printf(".L.begin.%d:\n", seq);
+        if (node->cond) {
+            gen_expr(node->cond);
+            printf("  cmp %s, 0\n", reg(--top));
+            printf("  je  .L.end.%d\n", seq);
+        }
+        gen_stmt(node->then);
+        if (node->inc)
+            gen_stmt(node->inc);
+        printf("  jmp .L.begin.%d\n", seq);
+        printf(".L.end.%d:\n", seq);
         return;
     }
     case ND_RETURN:
