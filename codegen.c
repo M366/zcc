@@ -28,7 +28,18 @@ static void gen_addr(Node *node) {
     error_tok(node->tok, "not an lvalue");
 }
 
-static void load(void) {
+// Load a value from where the stack top is pointing to.
+static void load(Type *ty) {
+    if (ty->kind == TY_ARRAY) {
+        // If it is an array, do nothing because in general we can't load
+        // an entire array to a register.
+        //
+        //
+        //
+        //
+        return;
+    }
+
     printf("  mov %s, [%s]\n", reg(top - 1), reg(top - 1));
 }
 
@@ -45,16 +56,19 @@ static void gen_expr(Node *node) {
         return;
     case ND_VAR:
         gen_addr(node);
-        load();
+        load(node->ty);
         return;
     case ND_DEREF:
         gen_expr(node->lhs);
-        load();
+        load(node->ty);
         return;
     case ND_ADDR:
         gen_addr(node->lhs);
         return;
     case ND_ASSIGN:
+        if (node->ty->kind == TY_ARRAY)
+            error_tok(node->tok, "not an lvalue");
+
         gen_expr(node->rhs);
         gen_addr(node->lhs);
         store();
