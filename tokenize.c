@@ -48,6 +48,15 @@ Token *skip(Token *tok, char *op) {
     return tok->next;
 }
 
+bool consume(Token **rest, Token *tok, char *str) {
+    if (equal(tok, str)) {
+        *rest = tok->next;
+        return true;
+    }
+    *rest = tok;
+    return false;
+}
+
 // Create a new token and add it as the next token of `cur`.
 static Token *new_token(TokenKind kind, Token *cur, char *str, int len) {
     Token *tok = calloc(1, sizeof(Token));
@@ -62,10 +71,34 @@ static bool startswith(char *p, char *q) {
     return strncmp(p, q, strlen(q)) == 0;
 }
 
+static bool is_alpha(char c) {
+    return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || c == '_';
+}
+
+static bool is_alnum(char c) {
+    return is_alpha(c) || ('0' <= c && c <= '9');
+}
+
+static bool is_keyword(Token *tok) {
+    static char *kw[] = {
+        "return", "if", "else", "for", "while", "int", "sizeof"
+    };
+
+    for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+        if (equal(tok, kw[i]))
+            return true;
+    return false;
+}
+
+static void convert_keywords(Token *tok) {
+    for (Token *t = tok; t->kind != TK_EOF; t = t->next)
+        if (t->kind == TK_IDENT && is_keyword(t))
+            t->kind = TK_RESERVED;
+}
+
 // Tokenize a given string and returns new tokens.
-Token *tokenize(char *input) {
-    char *p = input;
-    current_input = input;
+Token *tokenize(char *p) {
+    current_input = p;
     Token head = {};
     Token *cur = &head;
 
@@ -82,6 +115,15 @@ Token *tokenize(char *input) {
             char *q = p;
             cur->val = strtoul(p, &p, 10);
             cur->len = p - q;
+            continue;
+        }
+
+        // Identifier
+        if (is_alpha(*p)) {
+            char *q = p++;
+            while (is_alnum(*p))
+                p++;
+            cur = new_token(TK_IDENT, cur, q, p - q);
             continue;
         }
 
@@ -103,5 +145,6 @@ Token *tokenize(char *input) {
     }
 
     new_token(TK_EOF, cur, p, 0);
+    convert_keywords(head.next);
     return head.next;
 }
