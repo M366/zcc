@@ -1,5 +1,5 @@
 # zcc
 
-It is a personal project that was made for learning C compiler.
+It is a personal project to learn C compiler.
 
 https://www.sigbus.info/compilerbook
