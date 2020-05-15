@@ -20,7 +20,8 @@
 
 // All local variable instances created during parsing are
 // accumulated to this list.
-Var *locals;
+static Var *locals;
+static Var *globals;
 
 static Type *typespec(Token **rest, Token *tok);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
@@ -43,6 +44,11 @@ static Var *find_var(Token *tok) {
     for (Var *var = locals; var; var = var->next)
         if (strlen(var->name) == tok->len && !strncmp(tok->loc, var->name, tok->len))
             return var;
+
+    for (Var *var = globals; var; var = var->next)
+        if (strlen(var->name) == tok->len && !strncmp(tok->loc, var->name, tok->len))
+            return var;
+
     return NULL;
 }
 
@@ -82,8 +88,19 @@ static Var *new_lvar(char *name, Type *ty) {
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
     var->ty = ty;
+    var->is_local = true;
     var->next = locals;
     locals = var;
+    return var;
+}
+
+static Var *new_gvar(char *name, Type *ty) {
+    Var *var = calloc(1, sizeof(Var));
+    var->name = name;
+    var->ty = ty;
+    var->is_local = false;
+    var->next = globals;
+    globals = var;
     return var;
 }
 
@@ -144,9 +161,9 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     return ty;
 }
 
-// type-suffix = ("(" func-params
-//             = "[" num "]" type-suffix
-//             = ε
+// type-suffix = "(" func-params
+//             | "[" num "]" type-suffix
+//             | ε
 static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
     if (equal(tok, "("))
         return func_params(rest, tok->next, ty);
@@ -162,7 +179,7 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
     return ty;
 }
 
-// declarator = "*"* ident
+// declarator = "*"* ident type-suffix
 static Type *declarator(Token **rest, Token *tok, Type *ty) {
     while (consume(&tok, tok, "*"))
         ty = pointer_to(ty);
@@ -477,7 +494,7 @@ static Node *unary(Token **rest, Token *tok) {
     return postfix(rest, tok);
 }
 
-// postfix = primary ("[" expr "]")
+// postfix = primary ("[" expr "]")*
 static Node *postfix(Token **rest, Token *tok) {
     Node *node = primary(&tok, tok);
 
@@ -522,6 +539,12 @@ static Node *primary(Token **rest, Token *tok) {
         return node;
     }
 
+    if (equal(tok, "sizeof")) {
+        Node *node = unary(rest, tok->next);
+        add_type(node);
+        return new_num(node->ty->size, tok);
+    }
+
     if (tok->kind == TK_IDENT) {
         // Function call
         if (equal(tok->next, "("))
@@ -535,23 +558,40 @@ static Node *primary(Token **rest, Token *tok) {
         return new_var_node(var, tok);
     }
 
-    if (equal(tok, "sizeof")) {
-        Node *node = unary(rest, tok->next);
-        add_type(node);
-        return new_num(node->ty->size, tok);
-    }
-
     Node *node = new_num(get_number(tok), tok);
     *rest = tok->next;
     return node;
 }
 
-// program = funcdef*
-Function *parse(Token *tok) {
+// program = (funcdef | global-var)*
+Program *parse(Token *tok) {
     Function head = {};
     Function *cur = &head;
+    globals = NULL;
 
-    while (tok->kind != TK_EOF)
-        cur = cur->next = funcdef(&tok, tok);
-    return head.next;
+    while (tok->kind != TK_EOF) {
+        Token *start = tok;
+        Type *basety = typespec(&tok, tok);
+        Type *ty = declarator(&tok, tok, basety);
+
+        // Function
+        if (ty->kind == TY_FUNC) {
+            cur = cur->next = funcdef(&tok, start);
+            continue;
+        }
+
+        // Global variable
+        for (;;) {
+            new_gvar(get_ident(ty->name), ty);
+            if (consume(&tok, tok, ";"))
+                break;
+            tok = skip(tok, ",");
+            ty = declarator(&tok, tok, basety);
+        }
+    }
+
+    Program *prog = calloc(1, sizeof(Program));
+    prog->globals = globals;
+    prog->fns = head.next;
+    return prog;
 }
