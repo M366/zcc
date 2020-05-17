@@ -14,6 +14,7 @@ static char *reg(int idx) {
 }
 
 static void gen_expr(Node *node);
+static void gen_stmt(Node *node);
 
 // Pushes the given node's address to the stack.
 static void gen_addr(Node *node) {
@@ -86,6 +87,11 @@ static void gen_expr(Node *node) {
         gen_expr(node->rhs);
         gen_addr(node->lhs);
         store(node->ty);
+        return;
+    case ND_STMT_EXPR:
+        for (Node *n = node->body; n; n = n->next)
+            gen_stmt(n);
+        top++;
         return;
     case ND_FUNCALL: {
         int nargs = 0;
@@ -233,7 +239,7 @@ static void emit_text(Program *prog) {
     printf(".text\n");
 
     for (Function *fn = prog->fns; fn; fn = fn->next) {
-        printf(".globl main\n");
+        printf(".globl %s\n", fn->name);
         printf("%s:\n", fn->name);
         current_fn = fn;
 
@@ -247,7 +253,7 @@ static void emit_text(Program *prog) {
         printf("  mov [rbp-32], r15\n");
         
         // Save arguments to the stack
-        int i =0;
+        int i = 0;
         for (Var *var = fn->params; var; var = var->next)
             i++;
 
