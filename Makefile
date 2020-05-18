@@ -11,10 +11,12 @@ $(OBJS): zcc.h
 	mkdir -p /tmp/tmpfs
 
 test: zcc /tmp/tmpfs
-	./test.sh
+	./zcc tests/tests.c > /tmp/tmpfs/tmp.s
+	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s
+	/tmp/tmpfs/tmp
 
 clean:
-	rm -f zcc *.o *~ tmp*
+	rm -rf zcc *.o *~ tmp* tests/*~ tests/*.o
 	rm -rf /tmp/tmpfs/*
 
 .PHONY: test clean
