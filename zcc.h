@@ -32,7 +32,7 @@ struct Token {
     char *loc;      // Token location
     int len;        // Token length
 
-    char *contents; // String literal contents including temination '\0'
+    char *contents; // String literal contents including terminating '\0'
     char cont_len;  // string literal length
 
     int line_no;    // Line number
@@ -85,6 +85,7 @@ typedef enum {
     ND_FUNCALL,   // Function call
     ND_EXPR_STMT, // Expression statement
     ND_STMT_EXPR, // Statement expression (GCC extention)
+    ND_NULL_EXPR, // Do nothing
     ND_VAR,       // Variable
     ND_NUM,       // Integer
 } NodeKind;
@@ -112,7 +113,8 @@ struct Node {
 
     // Function call
     char *funcname;
-    Node *args;
+    Var **args;
+    int nargs;
 
     Var *var;      // Used if kind == ND_VAR
     long val;      // Used if kind == ND_NUM
@@ -150,7 +152,7 @@ typedef enum {
 
 struct Type {
     TypeKind kind;
-    int size;           // sizeof() value
+    int size;      // sizeof() value
 
     // Pointer-to or array-of type. We intentionally use the same member
     // to represent pointer/array duality in C.

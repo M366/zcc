@@ -19,8 +19,8 @@ void error(char *fmt, ...) {
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-static void verror_at(int line_no,  char *loc, char *fmt, va_list ap) {
-    // Find a line containig `loc`.
+static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+    // Find a line containing `loc`.
     char *line = loc;
     while (current_input < line && line[-1] != '\n')
         line--;
@@ -120,7 +120,7 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
     static char *kw[] = {
-        "return", "if", "else", "for", "while", "int", "sizeof", "char"
+        "return", "if", "else", "for", "while", "int", "sizeof", "char",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -190,11 +190,10 @@ static Token *read_string_literal(Token *cur, char *start) {
     int len = 0;
 
     while (*p != '"') {
-        if (*p == '\\') {
+        if (*p == '\\')
             buf[len++] = read_escaped_char(&p, p + 1);
-        } else {
+        else
             buf[len++] = *p++;
-        }
     }
 
     buf[len++] = '\0';
@@ -338,8 +337,8 @@ static char *read_file(char *path) {
     if (fp != stdin)
         fclose(fp);
     
-    // Canonicalize the last line by appening "\n"
-    // if it does note end with a newline.
+    // Canonicalize the last line by appending "\n"
+    // if it does not end with a newline.
     if (nread == 0 || buf[nread - 1] != '\n')
         buf[nread++] = '\n';
     buf[nread] = '\0';
