@@ -15,6 +15,11 @@ test: zcc /tmp/tmpfs
 	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s
 	/tmp/tmpfs/tmp
 
+queen: zcc /tmp/tmpfs
+	./zcc tests/nqueen.c > /tmp/tmpfs/tmp.s
+	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s
+	/tmp/tmpfs/tmp
+
 clean:
 	rm -rf zcc *.o *~ tmp* tests/*~ tests/*.o
 	rm -rf /tmp/tmpfs/*
