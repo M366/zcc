@@ -2,7 +2,8 @@
 
 static int top;
 static int labelseq = 1;
-static char *argreg[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+static char *argreg8[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"};
+static char *argreg64[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
 static Function *current_fn;
 
 static char *reg(int idx) {
@@ -13,6 +14,7 @@ static char *reg(int idx) {
 }
 
 static void gen_expr(Node *node);
+static void gen_stmt(Node *node);
 
 // Pushes the given node's address to the stack.
 static void gen_addr(Node *node) {
@@ -43,11 +45,21 @@ static void load(Type *ty) {
         return;
     }
 
-    printf("  mov %s, [%s]\n", reg(top - 1), reg(top - 1));
+    char *r = reg(top - 1);
+    if (ty->size == 1)
+        printf("  movsx %s, byte ptr [%s]\n", r, r);
+    else
+        printf("  mov %s, [%s]\n", r, r);
 }
 
-static void store(void) {
-    printf("  mov [%s], %s\n", reg(top - 1), reg(top - 2));
+static void store(Type *ty) {
+    char *rd = reg(top - 1);
+    char *rs = reg(top - 2);
+
+    if (ty->size == 1)
+        printf("  mov [%s], %sb\n", rd, rs);
+    else
+        printf("  mov [%s], %s\n", rd, rs);
     top--;
 }
 
@@ -74,7 +86,12 @@ static void gen_expr(Node *node) {
 
         gen_expr(node->rhs);
         gen_addr(node->lhs);
-        store();
+        store(node->ty);
+        return;
+    case ND_STMT_EXPR:
+        for (Node *n = node->body; n; n = n->next)
+            gen_stmt(n);
+        top++;
         return;
     case ND_FUNCALL: {
         int nargs = 0;
@@ -84,7 +101,7 @@ static void gen_expr(Node *node) {
         }
 
         for (int i = 1; i <= nargs; i++)
-            printf("  mov %s, %s\n", argreg[nargs - i], reg(--top));
+            printf("  mov %s, %s\n", argreg64[nargs - i], reg(--top));
 
         printf("  push r10\n");
         printf("  push r11\n");
@@ -207,7 +224,14 @@ static void emit_data(Program *prog) {
 
     for (Var *var = prog->globals; var; var = var->next) {
         printf("%s:\n", var->name);
-        printf("  .zero %d\n", var->ty->size);
+
+        if (!var->init_data) {
+            printf("  .zero %d\n", var->ty->size);
+            continue;
+        }
+
+        for (int i = 0; i < var->ty->size; i++)
+            printf("  .byte %d\n", var->init_data[i]);
     }
 }
 
@@ -215,7 +239,7 @@ static void emit_text(Program *prog) {
     printf(".text\n");
 
     for (Function *fn = prog->fns; fn; fn = fn->next) {
-        printf(".globl main\n");
+        printf(".globl %s\n", fn->name);
         printf("%s:\n", fn->name);
         current_fn = fn;
 
@@ -229,11 +253,16 @@ static void emit_text(Program *prog) {
         printf("  mov [rbp-32], r15\n");
         
         // Save arguments to the stack
-        int i =0;
+        int i = 0;
         for (Var *var = fn->params; var; var = var->next)
             i++;
-        for (Var *var = fn->params; var; var = var->next)
-            printf("  mov [rbp-%d], %s\n", var->offset, argreg[--i]);
+
+        for (Var *var = fn->params; var; var = var->next) {
+            if (var->ty->size == 1)
+                printf("  mov [rbp-%d], %s\n", var->offset, argreg8[--i]);
+            else
+                printf("  mov [rbp-%d], %s\n", var->offset, argreg64[--i]);
+        }
 
         // Emit code
         for (Node *n = fn->node; n; n = n->next) {

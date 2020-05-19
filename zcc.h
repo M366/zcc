@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -17,6 +18,7 @@ typedef struct Type Type;
 typedef enum {
     TK_RESERVED, // Keywords or punctuators
     TK_IDENT,    // Identifiers
+    TK_STR,      // String literals
     TK_NUM,      // Numeric literals
     TK_EOF,      // End-of-file markers
 } TokenKind;
@@ -29,6 +31,9 @@ struct Token {
     long val;       // If kind is TK_NUM, its value
     char *loc;      // Token location
     int len;        // Token length
+
+    char *contents; // String literal contents including temination '\0'
+    char cont_len;  // string literal length
 };
 
 void error(char *fmt, ...);
@@ -36,7 +41,7 @@ void error_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
-Token *tokenize(char *input);
+Token *tokenize_file(char *filename);
 
 //
 // parse.c
@@ -48,8 +53,13 @@ struct Var {
     Var *next;
     char *name;    // Variable name
     Type *ty;      // Type
-    int offset;    // Offset from RBP
     bool is_local; // local or global
+
+    // Local variable
+    int offset;
+
+    // Global variable
+    char *init_data;
 };
 
 // AST node
@@ -71,6 +81,7 @@ typedef enum {
     ND_BLOCK,     // { ... }
     ND_FUNCALL,   // Function call
     ND_EXPR_STMT, // Expression statement
+    ND_STMT_EXPR, // Statement expression (GCC extention)
     ND_VAR,       // Variable
     ND_NUM,       // Integer
 } NodeKind;
@@ -93,7 +104,7 @@ struct Node {
     Node *init;
     Node *inc;
 
-    // Block
+    // Block or statement expression
     Node *body;
 
     // Function call
@@ -127,6 +138,7 @@ Program *parse(Token *tok);
 //
 
 typedef enum {
+    TY_CHAR,
     TY_INT,
     TY_PTR,
     TY_FUNC,
@@ -159,6 +171,7 @@ struct Type {
     Type *next;
 };
 
+extern Type *ty_char;
 extern Type *ty_int;
 
 bool is_integer(Type *ty);

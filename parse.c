@@ -18,10 +18,25 @@
 
 #include "zcc.h"
 
+// Scope for local or global variables.
+typedef struct VarScope VarScope;
+struct VarScope {
+    VarScope *next;
+    char *name;
+    int depth;
+    Var *var;
+};
+
 // All local variable instances created during parsing are
 // accumulated to this list.
 static Var *locals;
 static Var *globals;
+
+static VarScope *var_scope;
+
+// scope_depth is incremented by one at "{" and decremented
+// by one at "}".
+static int scope_depth;
 
 static Type *typespec(Token **rest, Token *tok);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
@@ -39,16 +54,21 @@ static Node *postfix(Token **rest, Token *tok);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 
-// Find a local variable by name.
+static void enter_scope(void) {
+    scope_depth++;
+}
+
+static void leave_scope(void) {
+    scope_depth--;
+    while (var_scope && var_scope->depth > scope_depth)
+        var_scope = var_scope->next;
+}
+
+// Find a variable by name.
 static Var *find_var(Token *tok) {
-    for (Var *var = locals; var; var = var->next)
-        if (strlen(var->name) == tok->len && !strncmp(tok->loc, var->name, tok->len))
-            return var;
-
-    for (Var *var = globals; var; var = var->next)
-        if (strlen(var->name) == tok->len && !strncmp(tok->loc, var->name, tok->len))
-            return var;
-
+    for (VarScope *sc = var_scope; sc; sc = sc->next)
+        if (strlen(sc->name) == tok->len && !strncmp(tok->loc, sc->name, tok->len))
+            return sc->var;
     return NULL;
 }
 
@@ -84,6 +104,16 @@ static Node *new_var_node(Var *var, Token *tok) {
     return node;
 }
 
+static VarScope *push_scope(char *name, Var *var) {
+    VarScope *sc = calloc(1, sizeof(VarScope));
+    sc->next = var_scope;
+    sc->name = name;
+    sc->var = var;
+    sc->depth = scope_depth;
+    var_scope = sc;
+    return sc;
+}
+
 static Var *new_lvar(char *name, Type *ty) {
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
@@ -91,6 +121,7 @@ static Var *new_lvar(char *name, Type *ty) {
     var->is_local = true;
     var->next = locals;
     locals = var;
+    push_scope(name, var);
     return var;
 }
 
@@ -101,6 +132,21 @@ static Var *new_gvar(char *name, Type *ty) {
     var->is_local = false;
     var->next = globals;
     globals = var;
+    push_scope(name, var);
+    return var;
+}
+
+static char *new_gvar_name(void) {
+    static int cnt = 0;
+    char *buf = malloc(20);
+    sprintf(buf, ".L.data.%d", cnt++);
+    return buf;
+}
+
+static Var *new_string_literal(char *p, int len) {
+    Type *ty = array_of(ty_char, len);
+    Var *var = new_gvar(new_gvar_name(), ty);
+    var->init_data = p;
     return var;
 }
 
@@ -125,6 +171,8 @@ static Function *funcdef(Token **rest, Token *tok) {
 
     Function *fn = calloc(1, sizeof(Function));
     fn->name = get_ident(ty->name);
+
+    enter_scope();
     for (Type *t = ty->params; t; t = t->next)
         new_lvar(get_ident(t->name), t);
     fn->params = locals;
@@ -132,11 +180,17 @@ static Function *funcdef(Token **rest, Token *tok) {
     tok = skip(tok, "{");
     fn->node = compound_stmt(rest, tok)->body;
     fn->locals = locals;
+    leave_scope();
     return fn;
 }
 
-// typespec = "int"
+// typespec = "char" | "int"
 static Type *typespec(Token **rest, Token *tok) {
+    if (equal(tok, "char")) {
+        *rest = tok->next;
+        return ty_char;
+    }
+
     *rest = skip(tok, "int");
     return ty_int;
 }
@@ -221,6 +275,11 @@ static Node *declaration(Token **rest, Token *tok) {
     return node;
 }
 
+// Returns true if a given token represents a type.
+static bool is_typename(Token *tok) {
+    return equal(tok, "char") || equal(tok, "int");
+}
+
 // stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "for" "(" expr? ";" expr? ";" expr? ")" stmt
@@ -287,16 +346,20 @@ static Node *stmt(Token **rest, Token *tok) {
 // compound-stmt = (declaration | stmt)* "}"
 static Node *compound_stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_BLOCK, tok);
-
     Node head = {};
     Node *cur = &head;
+
+    enter_scope();
+
     while (!equal(tok, "}")) {
-        if (equal(tok, "int"))
+        if (is_typename(tok))
             cur = cur->next = declaration(&tok, tok);
         else
             cur = cur->next = stmt(&tok, tok);
         add_type(cur);
     }
+
+    leave_scope();
     
     node->body = head.next;
     *rest = tok->next;
@@ -531,8 +594,28 @@ static Node *funcall(Token **rest, Token *tok) {
     return node;
 }
 
-// primary = "(" expr ")" | "sizeof" unary | ident func-args? | num
+// primary = "(" "{" stmt stmt* "}" ")"
+//         | "(" expr ")"
+//         | "sizeof" unary
+//         | ident func-args?
+//         | str
+//         | num
 static Node *primary(Token **rest, Token *tok) {
+    if (equal(tok, "(") && equal(tok->next, "{")) {
+        // This is a GNU statement expression.
+        Node *node = new_node(ND_STMT_EXPR, tok);
+        node->body = compound_stmt(&tok, tok->next->next)->body;
+        *rest = skip(tok, ")");
+
+        Node *cur = node->body;
+        while (cur->next)
+            cur = cur->next;
+        
+        if (cur->kind != ND_EXPR_STMT)
+            error_tok(cur->tok, "statement expression returning void is not supported");
+        return node;
+    }
+
     if (equal(tok, "(")) {
         Node *node = expr(&tok, tok->next);
         *rest = skip(tok, ")");
@@ -558,7 +641,16 @@ static Node *primary(Token **rest, Token *tok) {
         return new_var_node(var, tok);
     }
 
-    Node *node = new_num(get_number(tok), tok);
+    if (tok->kind == TK_STR) {
+        Var *var = new_string_literal(tok->contents, tok->cont_len);
+        *rest = tok->next;
+        return new_var_node(var, tok);
+    }
+
+    if (tok->kind != TK_NUM)
+        error_tok(tok, "expected expression");
+
+    Node *node = new_num(tok->val, tok);
     *rest = tok->next;
     return node;
 }
