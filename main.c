@@ -23,6 +23,9 @@ int main(int argc, char **argv) {
         fn->stack_size = align_to(offset, 16);
     }
 
+    // Emit a .file directive for the assembler.
+    printf(".file 1 \"%s\"\n", argv[1]);
+
     // Traverse the AST to emit assembly.
     codegen(prog);
 
