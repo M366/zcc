@@ -1,10 +1,5 @@
 #include "zcc.h"
 
-static int align_to(int n, int align) {
-    assert((align & (align - 1)) == 0);
-    return (n + align - 1) & ~(align - 1);
-}
-
 int main(int argc, char **argv) {
     if (argc != 2)
         error("%s: invalid number of arguments", argv[0]);
