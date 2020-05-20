@@ -8,10 +8,11 @@ int main(int argc, char **argv) {
     Token *tok = tokenize_file(argv[1]);
     Program *prog = parse(tok);
 
-    // Assign offsets to local variables.
+    // Assign offsets to local variables. The last declared lvar become the first lvar in the stack.
     for (Function *fn = prog->fns; fn; fn = fn->next) {
         int offset = 32; // 32 for callee-saved registers
         for (Var *var = fn->locals; var; var = var->next) {
+            offset = align_to(offset, var->ty->align);
             offset += var->ty->size;
             var->offset = offset;
         }
