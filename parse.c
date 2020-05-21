@@ -638,7 +638,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
         tok = tok->next;
     }
 
-    if (tag && !equal(tok, "{")) {
+    if (tag && !equal(tok, "{")) { // etc. struct tag ident;
         TagScope *sc = find_tag(tag);
         if (!sc)
             error_tok(tag, "unknown struct type");
@@ -646,7 +646,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
         return sc->ty;
     }
 
-    // Construct a struct object.
+    // Construct a struct object. etc. struct tag { ... }
     Type *ty = calloc(1, sizeof(Type));
     ty->kind = TY_STRUCT;
     ty->members = struct_members(rest, tok->next);
