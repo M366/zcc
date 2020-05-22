@@ -9,6 +9,7 @@
 #include <string.h>
 
 typedef struct Type Type;
+typedef struct Member Member;
 
 //
 // tokenize.c
@@ -32,8 +33,10 @@ struct Token {
     char *loc;      // Token location
     int len;        // Token length
 
-    char *contents; // String literal contents including temination '\0'
+    char *contents; // String literal contents including terminating '\0'
     char cont_len;  // string literal length
+
+    int line_no;    // Line number
 };
 
 void error(char *fmt, ...);
@@ -73,6 +76,8 @@ typedef enum {
     ND_LT,        // < less than
     ND_LE,        // <=
     ND_ASSIGN,    // =
+    ND_COMMA,     // ,
+    ND_MEMBER,    // . (struct member access);
     ND_ADDR,      // unary &
     ND_DEREF,     // unary *
     ND_RETURN,    // "return"
@@ -82,6 +87,7 @@ typedef enum {
     ND_FUNCALL,   // Function call
     ND_EXPR_STMT, // Expression statement
     ND_STMT_EXPR, // Statement expression (GCC extention)
+    ND_NULL_EXPR, // Do nothing
     ND_VAR,       // Variable
     ND_NUM,       // Integer
 } NodeKind;
@@ -106,10 +112,14 @@ struct Node {
 
     // Block or statement expression
     Node *body;
+    
+    // Struct member access
+    Member *member;
 
     // Function call
     char *funcname;
-    Node *args;
+    Var **args;
+    int nargs;
 
     Var *var;      // Used if kind == ND_VAR
     long val;      // Used if kind == ND_NUM
@@ -143,20 +153,22 @@ typedef enum {
     TY_PTR,
     TY_FUNC,
     TY_ARRAY,
+    TY_STRUCT,
 } TypeKind;
 
 struct Type {
     TypeKind kind;
-    int size;           // sizeof() value
+    int size;      // sizeof() value
+    int align;     // alignment
 
     // Pointer-to or array-of type. We intentionally use the same member
     // to represent pointer/array duality in C.
     //
-    //
-    //
-    //
-    //
-    //
+    // In many contxts in which a pointer is expected, we examine this
+    // member instead of "kind" member to determine whether a type is a
+    // pointer or not. That means in many contexts "array of T" is
+    // naturally handled as if it were "pointer to T", as required by
+    // the C spec.
     Type *base;
 
     // Declaration
@@ -165,10 +177,21 @@ struct Type {
     // Array
     int array_len;
 
+    // Struct
+    Member *members;
+
     // Function type
     Type *return_ty;
     Type *params;
     Type *next;
+};
+
+// Struct member
+struct Member {
+    Member *next;
+    Type *ty;
+    Token *name;
+    int offset;
 };
 
 extern Type *ty_char;
@@ -176,6 +199,7 @@ extern Type *ty_int;
 
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);
+int align_to(int n, int align);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);

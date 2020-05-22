@@ -3,6 +3,7 @@
 static int top;
 static int labelseq = 1;
 static char *argreg8[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"};
+static char *argreg32[] = {"edi", "esi", "edx", "ecx", "r8d", "r9d"};
 static char *argreg64[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
 static Function *current_fn;
 
@@ -28,6 +29,15 @@ static void gen_addr(Node *node) {
     case ND_DEREF:
         gen_expr(node->lhs);
         return;
+    case ND_COMMA:
+        gen_expr(node->lhs);
+        top--;
+        gen_addr(node->rhs);
+        return;
+    case ND_MEMBER:
+        gen_addr(node->lhs);
+        printf("  add %s, %d\n", reg(top - 1), node->member->offset);
+        return;
     }
 
     error_tok(node->tok, "not an lvalue");
@@ -35,7 +45,7 @@ static void gen_addr(Node *node) {
 
 // Load a value from where the stack top is pointing to.
 static void load(Type *ty) {
-    if (ty->kind == TY_ARRAY) {
+    if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT) {
         // If it is an array, do nothing because in general we can't load
         // an entire array to a register.
         //
@@ -46,30 +56,45 @@ static void load(Type *ty) {
     }
 
     char *r = reg(top - 1);
+    
     if (ty->size == 1)
         printf("  movsx %s, byte ptr [%s]\n", r, r);
+    else if (ty->size == 4)
+        printf("  movsx %s, dword ptr [%s]\n", r, r);
     else
         printf("  mov %s, [%s]\n", r, r);
 }
 
 static void store(Type *ty) {
-    char *rd = reg(top - 1);
-    char *rs = reg(top - 2);
+    char *rd = reg(top - 1); // rd: register dist
+    char *rs = reg(top - 2); // rs: register src
 
-    if (ty->size == 1)
+    if (ty->kind == TY_STRUCT) {
+        for (int i = 0; i < ty->size; i++) {
+            printf("  mov al, [%s+%d]\n", rs, i);
+            printf("  mov [%s+%d], al\n", rd, i);
+        }
+    } else if (ty->size == 1) {
         printf("  mov [%s], %sb\n", rd, rs);
-    else
+    } else if (ty->size == 4) {
+        printf("  mov [%s], %sd\n", rd, rs);
+    } else {
         printf("  mov [%s], %s\n", rd, rs);
+    }
+    
     top--;
 }
 
 // Generate code for a given node.
 static void gen_expr(Node *node) {
+    printf(".loc 1 %d\n", node->tok->line_no);
+
     switch (node->kind) {
     case ND_NUM:
         printf("  mov %s, %lu\n", reg(top++), node->val);
         return;
     case ND_VAR:
+    case ND_MEMBER:
         gen_addr(node);
         load(node->ty);
         return;
@@ -93,18 +118,28 @@ static void gen_expr(Node *node) {
             gen_stmt(n);
         top++;
         return;
+    case ND_NULL_EXPR:
+        top++;
+        return;
+    case ND_COMMA:
+        gen_expr(node->lhs);
+        top--;
+        gen_expr(node->rhs);
+        return;
     case ND_FUNCALL: {
-        int nargs = 0;
-        for (Node *arg = node->args; arg; arg = arg->next) {
-            gen_expr(arg);
-            nargs++;
-        }
-
-        for (int i = 1; i <= nargs; i++)
-            printf("  mov %s, %s\n", argreg64[nargs - i], reg(--top));
-
+        // Save caller-saved registers
         printf("  push r10\n");
         printf("  push r11\n");
+
+        // Load arguments from the stack.
+        for (int i = 0; i < node->nargs; i++) {
+            Var *arg = node->args[i];
+            if (arg->ty->size == 1)
+                printf("  movsx %s, byte ptr [rbp-%d]\n", argreg64[i], arg->offset);
+            else
+                printf("  mov %s, [rbp-%d]\n", argreg64[i], arg->offset);
+        }
+
         printf("  mov rax, 0\n");
         printf("  call %s\n", node->funcname);
         printf("  pop r11\n");
@@ -163,6 +198,8 @@ static void gen_expr(Node *node) {
 }
 
 static void gen_stmt(Node *node) {
+    printf(".loc 1 %d\n", node->tok->line_no);
+
     switch (node->kind) {
     case ND_IF: {
         int seq = labelseq++;
@@ -235,6 +272,15 @@ static void emit_data(Program *prog) {
     }
 }
 
+static char *get_argreg(int sz, int idx) {
+    if (sz == 1)
+        return argreg8[idx];
+    if (sz == 4)
+        return argreg32[idx];
+    assert(sz == 8);
+    return argreg64[idx];
+}
+
 static void emit_text(Program *prog) {
     printf(".text\n");
 
@@ -258,10 +304,8 @@ static void emit_text(Program *prog) {
             i++;
 
         for (Var *var = fn->params; var; var = var->next) {
-            if (var->ty->size == 1)
-                printf("  mov [rbp-%d], %s\n", var->offset, argreg8[--i]);
-            else
-                printf("  mov [rbp-%d], %s\n", var->offset, argreg64[--i]);
+            char *r = get_argreg(var->ty->size, --i);
+            printf("  mov [rbp-%d], %s\n", var->offset, r);
         }
 
         // Emit code

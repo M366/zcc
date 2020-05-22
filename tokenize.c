@@ -19,8 +19,8 @@ void error(char *fmt, ...) {
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-static void verror_at(char *loc, char *fmt, va_list ap) {
-    // Find a line containig `loc`.
+static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+    // Find a line containing `loc`.
     char *line = loc;
     while (current_input < line && line[-1] != '\n')
         line--;
@@ -29,12 +29,6 @@ static void verror_at(char *loc, char *fmt, va_list ap) {
     while (*end != '\n')
         end++;
 
-    // Get a line number.
-    int line_no = 1;
-    for (char *p = current_input; p < line; p++)
-        if (*p == '\n')
-            line_no++;
-    
     // Print out the line.
     int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
     fprintf(stderr, "%.*s\n", (int)(end - line), line);
@@ -50,15 +44,20 @@ static void verror_at(char *loc, char *fmt, va_list ap) {
 }
 
 static void error_at(char *loc, char *fmt, ...) {
+    int line_no = 1;
+    for (char *p = current_input; p < loc; p++)
+        if (*p == '\n')
+            line_no++;
+    
     va_list ap;
     va_start(ap, fmt);
-    verror_at(loc, fmt, ap);
+    verror_at(line_no, loc, fmt, ap);
 }
 
 void error_tok(Token *tok, char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    verror_at(tok->loc, fmt, ap);
+    verror_at(tok->line_no, tok->loc, fmt, ap);
 }
 
 // Consumes the current token if it matches `op`.
@@ -121,7 +120,8 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
     static char *kw[] = {
-        "return", "if", "else", "for", "while", "int", "sizeof", "char"
+        "return", "if", "else", "for", "while", "int", "sizeof", "char",
+        "struct", "union",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -191,11 +191,10 @@ static Token *read_string_literal(Token *cur, char *start) {
     int len = 0;
 
     while (*p != '"') {
-        if (*p == '\\') {
+        if (*p == '\\')
             buf[len++] = read_escaped_char(&p, p + 1);
-        } else {
+        else
             buf[len++] = *p++;
-        }
     }
 
     buf[len++] = '\0';
@@ -210,6 +209,21 @@ static void convert_keywords(Token *tok) {
     for (Token *t = tok; t->kind != TK_EOF; t = t->next)
         if (t->kind == TK_IDENT && is_keyword(t))
             t->kind = TK_RESERVED;
+}
+
+// Initialize line info for all tokens.
+static void add_line_info(Token *tok) {
+    char *p = current_input;
+    int line_no = 1;
+
+    do {
+        if (p == tok->loc) {
+            tok->line_no = line_no;
+            tok = tok->next;
+        }
+        if (*p == '\n')
+            line_no++;
+    } while (*p++);
 }
 
 // Tokenize a given string and returns new tokens.
@@ -270,7 +284,8 @@ static Token *tokenize(char *filename, char *p) {
 
         // Multi-letter punctuators
         if (startswith(p, "==") || startswith(p, "!=") ||
-            startswith(p, "<=") || startswith(p, ">=")) {
+            startswith(p, "<=") || startswith(p, ">=") ||
+            startswith(p, "->")) {
             cur = new_token(TK_RESERVED, cur, p, 2);
             p += 2;
             continue;
@@ -286,6 +301,7 @@ static Token *tokenize(char *filename, char *p) {
     }
 
     new_token(TK_EOF, cur, p, 0);
+    add_line_info(head.next);
     convert_keywords(head.next);
     return head.next;
 }
@@ -323,8 +339,8 @@ static char *read_file(char *path) {
     if (fp != stdin)
         fclose(fp);
     
-    // Canonicalize the last line by appening "\n"
-    // if it does note end with a newline.
+    // Canonicalize the last line by appending "\n"
+    // if it does not end with a newline.
     if (nread == 0 || buf[nread - 1] != '\n')
         buf[nread++] = '\n';
     buf[nread] = '\0';

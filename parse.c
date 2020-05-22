@@ -27,12 +27,26 @@ struct VarScope {
     Var *var;
 };
 
+// Scope for struct or union tags
+typedef struct TagScope TagScope;
+struct TagScope{
+    TagScope *next;
+    char *name;
+    int depth;
+    Type *ty;
+};
+
 // All local variable instances created during parsing are
 // accumulated to this list.
 static Var *locals;
+
+// Likewise, global variable are accumulated to this list.
 static Var *globals;
 
+// C has two block scopes; one is for variables and other is
+// for struct tags.
 static VarScope *var_scope;
+static TagScope *tag_scope;
 
 // scope_depth is incremented by one at "{" and decremented
 // by one at "}".
@@ -50,6 +64,8 @@ static Node *equality(Token **rest, Token *tok);
 static Node *relational(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
+static Type *struct_decl(Token **rest, Token *tok);
+static Type *union_decl(Token **rest, Token *tok);
 static Node *postfix(Token **rest, Token *tok);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
@@ -60,8 +76,12 @@ static void enter_scope(void) {
 
 static void leave_scope(void) {
     scope_depth--;
+
     while (var_scope && var_scope->depth > scope_depth)
         var_scope = var_scope->next;
+
+    while (tag_scope && tag_scope->depth > scope_depth)
+        tag_scope = tag_scope->next;
 }
 
 // Find a variable by name.
@@ -69,6 +89,13 @@ static Var *find_var(Token *tok) {
     for (VarScope *sc = var_scope; sc; sc = sc->next)
         if (strlen(sc->name) == tok->len && !strncmp(tok->loc, sc->name, tok->len))
             return sc->var;
+    return NULL;
+}
+
+static TagScope *find_tag(Token *tok) {
+    for (TagScope *sc = tag_scope; sc; sc = sc->next)
+        if (strlen(sc->name) == tok->len && !strncmp(tok->loc, sc->name, tok->len))
+            return sc;
     return NULL;
 }
 
@@ -162,6 +189,15 @@ static long get_number(Token *tok) {
     return tok->val;
 }
 
+static void push_tag_scope(Token *tok, Type *ty) {
+    TagScope *sc = calloc(1, sizeof(TagScope));
+    sc->next = tag_scope;
+    sc->name = strndup(tok->loc, tok->len);
+    sc->depth = scope_depth;
+    sc->ty = ty;
+    tag_scope = sc;
+}
+
 // funcdef = typespec declarator compound-stmt
 static Function *funcdef(Token **rest, Token *tok) {
     locals = NULL;
@@ -184,15 +220,25 @@ static Function *funcdef(Token **rest, Token *tok) {
     return fn;
 }
 
-// typespec = "char" | "int"
+// typespec = "char" | "int" | struct-decl | union-decl
 static Type *typespec(Token **rest, Token *tok) {
     if (equal(tok, "char")) {
         *rest = tok->next;
         return ty_char;
     }
 
-    *rest = skip(tok, "int");
-    return ty_int;
+    if (equal(tok, "int")) {
+        *rest = tok->next;
+        return ty_int;
+    }
+
+    if (equal(tok, "struct"))
+        return struct_decl(rest, tok->next);
+
+    if (equal(tok, "union"))
+        return union_decl(rest, tok->next);
+
+    error_tok(tok, "typename expected");
 }
 
 // func-params = (param ("," param)*)? ")"
@@ -277,7 +323,8 @@ static Node *declaration(Token **rest, Token *tok) {
 
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
-    return equal(tok, "char") || equal(tok, "int");
+    return equal(tok, "char") || equal(tok, "int") || equal(tok, "struct") ||
+            equal(tok, "union");
 }
 
 // stmt = "return" expr ";"
@@ -373,9 +420,15 @@ static Node *expr_stmt(Token **rest, Token *tok) {
     return node;
 }
 
-// expr = assign
+// expr = assign ("," expr)?
 static Node *expr(Token **rest, Token *tok) {
-    return assign(rest, tok);
+    Node *node = assign(&tok, tok);
+
+    if (equal(tok, ","))
+        return new_binary(ND_COMMA, node, expr(rest, tok->next), tok);
+    
+    *rest = tok;
+    return node;
 }
 
 // assign = equality ("=" assign)?
@@ -557,41 +610,183 @@ static Node *unary(Token **rest, Token *tok) {
     return postfix(rest, tok);
 }
 
-// postfix = primary ("[" expr "]")*
-static Node *postfix(Token **rest, Token *tok) {
-    Node *node = primary(&tok, tok);
+// struct-members = (typespec declarator ("," declarator)* ";")*
+static Member *struct_members(Token **rest, Token *tok) {
+    Member head = {};
+    Member *cur = &head;
 
-    while (equal(tok, "[")) {
-        // x[y] is short for *(x+y)
-        Token *start = tok;
-        Node *idx = expr(&tok, tok->next);
-        tok = skip(tok, "]");
-        node = new_unary(ND_DEREF, new_add(node, idx, start), start);
+    while (!equal(tok, "}")) {
+        Type *basety = typespec(&tok, tok);
+        int cnt = 0;
+
+        while (!consume(&tok, tok, ";")) {
+            if (cnt++)
+                tok = skip(tok, ",");
+            
+            Member *mem = calloc(1, sizeof(Member));
+            mem->ty = declarator(&tok, tok, basety);
+            mem->name = mem->ty->name;
+            cur = cur->next = mem;
+        }
     }
-    *rest = tok;
+
+    *rest = tok->next;
+    return head.next;
+}
+
+// struct-union-decl = ident? ("{" struct-members)?
+static Type *struct_union_decl(Token **rest, Token *tok) {
+    // Read a tag.
+    Token *tag = NULL;
+    if (tok->kind == TK_IDENT) {
+        tag = tok;
+        tok = tok->next;
+    }
+
+    if (tag && !equal(tok, "{")) { // etc. struct tag ident;
+        TagScope *sc = find_tag(tag);
+        if (!sc)
+            error_tok(tag, "unknown struct type");
+        *rest = tok;
+        return sc->ty;
+    }
+
+    // Construct a struct object. etc. struct tag { ... }
+    Type *ty = calloc(1, sizeof(Type));
+    ty->kind = TY_STRUCT;
+    ty->members = struct_members(rest, tok->next);
+
+    // Register the struct type if a name was given.
+    if (tag)
+        push_tag_scope(tag, ty);
+    return ty;
+}
+
+// struct-decl = struct-union-decl
+static Type *struct_decl(Token **rest, Token *tok) {
+    Type *ty = struct_union_decl(rest, tok);
+
+    // Assign offsets within the struct to members.
+    int offset = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+        offset = align_to(offset, mem->ty->align);
+        mem->offset = offset;
+        offset += mem->ty->size;
+        
+        if (ty->align < mem->ty->align)
+            ty->align = mem->ty->align;
+    }
+    ty->size = align_to(offset, ty->align);
+    return ty;
+}
+
+// union-decl = struct-union-decl
+static Type *union_decl(Token **rest, Token *tok) {
+    Type *ty = struct_union_decl(rest, tok);
+
+    // If union, we don't have to assign offsets because they
+    // are already initialized to zero. We need to compute the
+    // alignment and the size though.
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+        if (ty->align < mem->ty->align)
+            ty->align = mem->ty->align;
+        if (ty->size < mem->ty->size)
+            ty->size = mem->ty->size;
+    }
+    ty->size = align_to(ty->size, ty->align);
+    return ty;
+}
+
+static Member *get_struct_member(Type *ty, Token *tok) {
+    for (Member *mem = ty->members; mem; mem = mem->next)
+        if (mem->name->len == tok->len &&
+                !strncmp(mem->name->loc, tok->loc, tok->len))
+            return mem;
+    error_tok(tok, "no such member");
+}
+
+static Node *struct_ref(Node *lhs, Token *tok) {
+    add_type(lhs);
+    if (lhs->ty->kind != TY_STRUCT)
+        error_tok(lhs->tok, "not a struct");
+        
+    Node *node = new_unary(ND_MEMBER, lhs, tok);
+    node->member = get_struct_member(lhs->ty, tok);
     return node;
 }
 
+// postfix = primary ("[" expr "]" | "." ident | "->" ident)*
+static Node *postfix(Token **rest, Token *tok) {
+    Node *node = primary(&tok, tok);
+
+    for (;;) {
+        if (equal(tok, "[")) {
+            // x[y] is short for *(x+y)
+            Token *start = tok;
+            Node *idx = expr(&tok, tok->next);
+            tok = skip(tok, "]");
+            node = new_unary(ND_DEREF, new_add(node, idx, start), start);
+            continue;
+        }
+
+        if (equal(tok, ".")) {
+            node = struct_ref(node, tok->next);
+            tok = tok->next->next;
+            continue;
+        }
+
+        if (equal(tok, "->")) {
+            // x->y is short for (*x).y
+            node = new_unary(ND_DEREF, node, tok);
+            node = struct_ref(node, tok->next);
+            tok = tok->next->next;
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+
+    }
+}
+
 // funcall = ident "(" (assign ("," assign)*)? ")"
+//
+// foo(a,b,c) is compiled to ({ t1=a; t2=b; t3=c; foo(t1, t2, t3); })
+// where t1, t2 and t3 are fresh local variables.
 static Node *funcall(Token **rest, Token *tok) {
     Token *start = tok;
     tok = tok->next->next;
 
-    Node head = {};
-    Node *cur = &head;
+    Node *node = new_node(ND_NULL_EXPR, tok);
+    Var **args = NULL;
+    int nargs = 0;
 
     while (!equal(tok, ")")) {
-        if (cur != &head)
+        if (nargs)
             tok = skip(tok, ",");
-        cur = cur->next = assign(&tok, tok);
+
+        Node *arg = assign(&tok, tok);
+        add_type(arg);
+
+        Var *var = arg->ty->base
+            ? new_lvar("", pointer_to(arg->ty->base))
+            : new_lvar("", arg->ty);
+        
+        args = realloc(args, sizeof(*args) * (nargs + 1));
+        args[nargs] = var;
+        nargs++;
+
+        Node *expr = new_binary(ND_ASSIGN, new_var_node(var, tok), arg, tok);
+        node = new_binary(ND_COMMA, node, expr, tok);
     }
 
     *rest = skip(tok, ")");
 
-    Node *node = new_node(ND_FUNCALL, start);
-    node->funcname = strndup(start->loc, start->len);
-    node->args = head.next;
-    return node;
+    Node *funcall = new_node(ND_FUNCALL, start);
+    funcall->funcname = strndup(start->loc, start->len);
+    funcall->args = args;
+    funcall->nargs = nargs;
+    return new_binary(ND_COMMA, node, funcall, tok);
 }
 
 // primary = "(" "{" stmt stmt* "}" ")"
