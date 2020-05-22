@@ -29,7 +29,7 @@ struct VarScope {
 
 // Scope for struct or union tags
 typedef struct TagScope TagScope;
-struct TagScope{
+struct TagScope {
     TagScope *next;
     char *name;
     int depth;
@@ -40,10 +40,10 @@ struct TagScope{
 // accumulated to this list.
 static Var *locals;
 
-// Likewise, global variable are accumulated to this list.
+// Likewise, global variables are accumulated to this list.
 static Var *globals;
 
-// C has two block scopes; one is for variables and other is
+// C has two block scopes; one is for variables and the other is
 // for struct tags.
 static VarScope *var_scope;
 static TagScope *tag_scope;
@@ -220,8 +220,14 @@ static Function *funcdef(Token **rest, Token *tok) {
     return fn;
 }
 
-// typespec = "char" | "short" | "int" | "long" | struct-decl | union-decl
+// typespec = "void" | "char" | "short" | "int" | "long"
+//          | struct-decl | union-decl
 static Type *typespec(Token **rest, Token *tok) {
+    if (equal(tok, "void")) {
+        *rest = tok->next;
+        return ty_void;
+    }
+
     if (equal(tok, "char")) {
         *rest = tok->next;
         return ty_char;
@@ -322,6 +328,9 @@ static Node *declaration(Token **rest, Token *tok) {
             tok = skip(tok, ",");
         
         Type *ty = declarator(&tok, tok, basety);
+        if (ty->kind == TY_VOID)
+            error_tok(tok, "variable declared void");
+
         Var *var = new_lvar(get_ident(ty->name), ty);
 
         if (!equal(tok, "="))
@@ -341,8 +350,14 @@ static Node *declaration(Token **rest, Token *tok) {
 
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
-    return equal(tok, "char") || equal(tok, "short") || equal(tok, "int") ||
-           equal(tok, "long") || equal(tok, "struct") || equal(tok, "union");
+    static char *kw[] = {
+        "void", "char", "short", "int", "long", "struct", "union",
+    };
+
+    for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+        if (equal(tok, kw[i]))
+            return true;
+    return false;
 }
 
 // stmt = "return" expr ";"
@@ -538,7 +553,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
     }
 
     // ptr + num
-    rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
+    rhs = new_binary(ND_MUL, rhs, new_num(size_of(lhs->ty->base), tok), tok);
     return new_binary(ND_ADD, lhs, rhs, tok);
 }
 
@@ -553,14 +568,14 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
 
     // ptr - num
     if (lhs->ty->base && is_integer(rhs->ty)) {
-        rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
+        rhs = new_binary(ND_MUL, rhs, new_num(size_of(lhs->ty->base), tok), tok);
         return new_binary(ND_SUB, lhs, rhs, tok);
     }
 
     // ptr - ptr, which returns how many elements are between the two.
     if (lhs->ty->base && rhs->ty->base) {
         Node *node = new_binary(ND_SUB, lhs, rhs, tok);
-        return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
+        return new_binary(ND_DIV, node, new_num(size_of(lhs->ty->base), tok), tok);
     }
 
     error_tok(tok, "invalid operands");
@@ -689,7 +704,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
         offset = align_to(offset, mem->ty->align);
         mem->offset = offset;
-        offset += mem->ty->size;
+        offset += size_of(mem->ty);
         
         if (ty->align < mem->ty->align)
             ty->align = mem->ty->align;
@@ -708,8 +723,8 @@ static Type *union_decl(Token **rest, Token *tok) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
         if (ty->align < mem->ty->align)
             ty->align = mem->ty->align;
-        if (ty->size < mem->ty->size)
-            ty->size = mem->ty->size;
+        if (ty->size < size_of(mem->ty))
+            ty->size = size_of(mem->ty);
     }
     ty->size = align_to(ty->size, ty->align);
     return ty;
@@ -763,7 +778,6 @@ static Node *postfix(Token **rest, Token *tok) {
 
         *rest = tok;
         return node;
-
     }
 }
 
@@ -838,7 +852,7 @@ static Node *primary(Token **rest, Token *tok) {
     if (equal(tok, "sizeof")) {
         Node *node = unary(rest, tok->next);
         add_type(node);
-        return new_num(node->ty->size, tok);
+        return new_num(size_of(node->ty), tok);
     }
 
     if (tok->kind == TK_IDENT) {
