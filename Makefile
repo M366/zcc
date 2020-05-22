@@ -12,7 +12,8 @@ $(OBJS): zcc.h
 
 test: zcc /tmp/tmpfs
 	./zcc tests/tests.c > /tmp/tmpfs/tmp.s
-	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s
+	echo 'int char_fn() { return 257; }' | gcc -xc -c -o tmp2.o -
+	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s tmp2.o
 	/tmp/tmpfs/tmp
 
 queen: zcc /tmp/tmpfs
