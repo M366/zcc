@@ -310,6 +310,8 @@ int main() {
   assert(8, ({ long int x; sizeof(x); }), "({ long int x; sizeof(x); })");
   assert(8, ({ int long x; sizeof(x); }), "({ int long x; sizeof(x); })");
 
+  assert(8, ({ long long x; sizeof(x); }), "({ int long x; sizeof(x); })");
+
   // assert(, ({}), "({})");
 
   printf("OK\n");
