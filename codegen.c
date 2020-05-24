@@ -177,11 +177,13 @@ static void gen_expr(Node *node) {
         // Load arguments from the stack.
         for (int i = 0; i < node->nargs; i++) {
             Var *arg = node->args[i];
-            if (arg->ty->size == 1)
+            int sz = size_of(arg->ty);
+            
+            if (sz == 1)
                 printf("  movsx %s, byte ptr [rbp-%d]\n", argreg32[i], arg->offset);
-            else if (arg->ty->size == 2)
+            else if (sz == 2)
                 printf("  movsx %s, word ptr [rbp-%d]\n", argreg32[i], arg->offset);
-            else if (arg->ty->size == 4)
+            else if (sz == 4)
                 printf("  mov %s, dword ptr [rbp-%d]\n", argreg32[i], arg->offset);
             else
                 printf("  mov %s, [rbp-%d]\n", argreg64[i], arg->offset);
