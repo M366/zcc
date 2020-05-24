@@ -90,6 +90,7 @@ typedef enum {
     ND_NULL_EXPR, // Do nothing
     ND_VAR,       // Variable
     ND_NUM,       // Integer
+    ND_CAST,      // Type cast
 } NodeKind;
 
 // AST node type
