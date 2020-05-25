@@ -120,6 +120,7 @@ struct Node {
 
     // Function call
     char *funcname;
+    Type *func_ty;
     Var **args;
     int nargs;
 
