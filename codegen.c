@@ -233,7 +233,6 @@ static void gen_expr(Node *node) {
             printf("  cdq\n");
             printf("  idiv %s\n", rs);
             printf("  mov %s, eax\n", rd);
-
         }
         return;
     case ND_EQ:
@@ -351,7 +350,8 @@ static void emit_text(Program *prog) {
     printf(".text\n");
 
     for (Function *fn = prog->fns; fn; fn = fn->next) {
-        printf(".globl %s\n", fn->name);
+        if (!fn->is_static)
+            printf(".globl %s\n", fn->name);
         printf("%s:\n", fn->name);
         current_fn = fn;
 
