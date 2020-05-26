@@ -41,6 +41,7 @@ struct Token {
 
 void error(char *fmt, ...);
 void error_tok(Token *tok, char *fmt, ...);
+void warn_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
@@ -90,6 +91,7 @@ typedef enum {
     ND_NULL_EXPR, // Do nothing
     ND_VAR,       // Variable
     ND_NUM,       // Integer
+    ND_CAST,      // Type cast
 } NodeKind;
 
 // AST node type
@@ -118,6 +120,7 @@ struct Node {
 
     // Function call
     char *funcname;
+    Type *func_ty;
     Var **args;
     int nargs;
 
@@ -130,6 +133,7 @@ struct Function {
     Function *next;
     char *name;
     Var *params;
+    bool is_static;
 
     Node *node;
     Var *locals;
@@ -141,6 +145,7 @@ typedef struct {
     Function *fns;
 } Program;
 
+Node *new_cast(Node *expr, Type *ty);
 Program *parse(Token *tok);
 
 //
@@ -148,8 +153,13 @@ Program *parse(Token *tok);
 //
 
 typedef enum {
+    TY_VOID,
+    TY_BOOL,
     TY_CHAR,
+    TY_SHORT,
     TY_INT,
+    TY_LONG,
+    TY_ENUM,
     TY_PTR,
     TY_FUNC,
     TY_ARRAY,
@@ -194,8 +204,13 @@ struct Member {
     int offset;
 };
 
+extern Type *ty_void;
+extern Type *ty_bool;
+
 extern Type *ty_char;
+extern Type *ty_short;
 extern Type *ty_int;
+extern Type *ty_long;
 
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);
@@ -203,6 +218,8 @@ int align_to(int n, int align);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
+Type *enum_type(void);
+int size_of(Type *ty);
 void add_type(Node *node);
 
 //

@@ -3,12 +3,23 @@
 static int top;
 static int labelseq = 1;
 static char *argreg8[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"};
+static char *argreg16[] = {"di", "si", "dx", "cx", "r8w", "r9w"};
 static char *argreg32[] = {"edi", "esi", "edx", "ecx", "r8d", "r9d"};
 static char *argreg64[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
 static Function *current_fn;
 
 static char *reg(int idx) {
     static char *r[] = {"r10", "r11", "r12", "r13", "r14", "r15"};
+    if (idx < 0 || sizeof(r) / sizeof(*r) <= idx)
+        error("register out of range: %d", idx);
+    return r[idx];
+}
+
+static char *xreg(Type *ty, int idx) {
+    if (ty->base || size_of(ty) == 8)
+        return reg(idx);
+    
+    static char *r[] = {"r10d", "r11d", "r12d", "r13d", "r14d", "r15d"};
     if (idx < 0 || sizeof(r) / sizeof(*r) <= idx)
         error("register out of range: %d", idx);
     return r[idx];
@@ -47,42 +58,77 @@ static void gen_addr(Node *node) {
 static void load(Type *ty) {
     if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT) {
         // If it is an array, do nothing because in general we can't load
-        // an entire array to a register.
-        //
-        //
-        //
-        //
+        // an entire array to a register. As a result, the result of an
+        // evaluation of an array becomes not the array itself but the
+        // address of the array. In other words, this is where "array is
+        // automatically converted to a pointer to the first element of
+        // the array in C" occurs.
         return;
     }
 
-    char *r = reg(top - 1);
-    
-    if (ty->size == 1)
-        printf("  movsx %s, byte ptr [%s]\n", r, r);
-    else if (ty->size == 4)
-        printf("  movsx %s, dword ptr [%s]\n", r, r);
+    char *rs = reg(top - 1);
+    char *rd = xreg(ty, top - 1);
+    int sz = size_of(ty);
+
+    // When we load a char or a short value to a register, we always
+    // extend them to the size of int, so we can assume the lower half of
+    // a register always contains a valid value. The upper half of a
+    // register for char, short and int may contain garbage. When we load
+    // a long value to a register, it simply occupies the entire register.
+    if (sz == 1)
+        printf("  movsx %s, byte ptr [%s]\n", rd, rs);
+    else if (sz == 2)
+        printf("  movsx %s, word ptr [%s]\n", rd, rs);
+    else if (sz == 4)
+        printf("  mov %s, dword ptr [%s]\n", rd, rs);
     else
-        printf("  mov %s, [%s]\n", r, r);
+        printf("  mov %s, [%s]\n", rd, rs);
 }
 
 static void store(Type *ty) {
     char *rd = reg(top - 1); // rd: register dist
     char *rs = reg(top - 2); // rs: register src
+    int sz = size_of(ty);
 
     if (ty->kind == TY_STRUCT) {
-        for (int i = 0; i < ty->size; i++) {
+        for (int i = 0; i < sz; i++) {
             printf("  mov al, [%s+%d]\n", rs, i);
             printf("  mov [%s+%d], al\n", rd, i);
         }
-    } else if (ty->size == 1) {
+    } else if (sz == 1) {
         printf("  mov [%s], %sb\n", rd, rs);
-    } else if (ty->size == 4) {
+    } else if (sz == 2) {
+        printf("  mov [%s], %sw\n", rd, rs);
+    } else if (sz == 4) {
         printf("  mov [%s], %sd\n", rd, rs);
     } else {
         printf("  mov [%s], %s\n", rd, rs);
     }
     
     top--;
+}
+
+static void cast(Type *from, Type *to) {
+    if (to->kind == TY_VOID)
+        return;
+    
+    char *r = reg(top - 1);
+
+    if (to->kind == TY_BOOL) {
+        printf("  cmp %s, 0\n", r);
+        printf("  setne %sb\n", r);
+        printf("  movsx %s, %sb\n", r, r);
+        return;
+    }
+
+    if (size_of(to) == 1)
+        printf("  movsx %s, %sb\n", r, r);
+    else if (size_of(to) == 2)
+        printf("  movsx %s, %sw\n", r, r);
+    else if (size_of(to) == 4)
+        printf("  mov %sd, %sd\n", r, r);
+    else if (is_integer(from) && size_of(from) < 8)
+        printf("  movsx %s, %sd\n", r, r);
 }
 
 // Generate code for a given node.
@@ -126,6 +172,10 @@ static void gen_expr(Node *node) {
         top--;
         gen_expr(node->rhs);
         return;
+    case ND_CAST:
+        gen_expr(node->lhs);
+        cast(node->lhs->ty, node->ty);
+        return;
     case ND_FUNCALL: {
         // Save caller-saved registers
         printf("  push r10\n");
@@ -134,8 +184,14 @@ static void gen_expr(Node *node) {
         // Load arguments from the stack.
         for (int i = 0; i < node->nargs; i++) {
             Var *arg = node->args[i];
-            if (arg->ty->size == 1)
-                printf("  movsx %s, byte ptr [rbp-%d]\n", argreg64[i], arg->offset);
+            int sz = size_of(arg->ty);
+            
+            if (sz == 1)
+                printf("  movsx %s, byte ptr [rbp-%d]\n", argreg32[i], arg->offset);
+            else if (sz == 2)
+                printf("  movsx %s, word ptr [rbp-%d]\n", argreg32[i], arg->offset);
+            else if (sz == 4)
+                printf("  mov %s, dword ptr [rbp-%d]\n", argreg32[i], arg->offset);
             else
                 printf("  mov %s, [rbp-%d]\n", argreg64[i], arg->offset);
         }
@@ -149,11 +205,12 @@ static void gen_expr(Node *node) {
     }
     }
 
+    // Binary expressions
     gen_expr(node->lhs);
     gen_expr(node->rhs);
 
-    char *rd = reg(top - 2);
-    char *rs = reg(top - 1);
+    char *rd = xreg(node->lhs->ty, top - 2);
+    char *rs = xreg(node->lhs->ty, top - 1);
     top--;
 
     switch (node->kind) {
@@ -167,10 +224,17 @@ static void gen_expr(Node *node) {
         printf("  imul %s, %s\n", rd, rs);
         return;
     case ND_DIV:
-        printf("  mov rax, %s\n", rd);
-        printf("  cqo\n");
-        printf("  idiv %s\n", rs);
-        printf("  mov %s, rax\n", rd);
+        if (size_of(node->ty) == 8) {
+            printf("  mov rax, %s\n", rd);
+            printf("  cqo\n");
+            printf("  idiv %s\n", rs);
+            printf("  mov %s, rax\n", rd);
+        } else {
+            printf("  mov eax, %s\n", rd);
+            printf("  cdq\n");
+            printf("  idiv %s\n", rs);
+            printf("  mov %s, eax\n", rd);
+        }
         return;
     case ND_EQ:
         printf("  cmp %s, %s\n", rd, rs);
@@ -263,7 +327,7 @@ static void emit_data(Program *prog) {
         printf("%s:\n", var->name);
 
         if (!var->init_data) {
-            printf("  .zero %d\n", var->ty->size);
+            printf("  .zero %d\n", size_of(var->ty));
             continue;
         }
 
@@ -275,6 +339,8 @@ static void emit_data(Program *prog) {
 static char *get_argreg(int sz, int idx) {
     if (sz == 1)
         return argreg8[idx];
+    if (sz == 2)
+        return argreg16[idx];
     if (sz == 4)
         return argreg32[idx];
     assert(sz == 8);
@@ -285,7 +351,8 @@ static void emit_text(Program *prog) {
     printf(".text\n");
 
     for (Function *fn = prog->fns; fn; fn = fn->next) {
-        printf(".globl %s\n", fn->name);
+        if (!fn->is_static)
+            printf(".globl %s\n", fn->name);
         printf("%s:\n", fn->name);
         current_fn = fn;
 
@@ -304,7 +371,7 @@ static void emit_text(Program *prog) {
             i++;
 
         for (Var *var = fn->params; var; var = var->next) {
-            char *r = get_argreg(var->ty->size, --i);
+            char *r = get_argreg(size_of(var->ty), --i);
             printf("  mov [rbp-%d], %s\n", var->offset, r);
         }
 

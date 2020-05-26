@@ -15,7 +15,7 @@ void error(char *fmt, ...) {
     exit(1);
 }
 
-// Reports an error message in the following format and exit.
+// Reports an error message in the following.
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
@@ -40,7 +40,6 @@ static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
     fprintf(stderr, "^ ");
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
-    exit(1);
 }
 
 static void error_at(char *loc, char *fmt, ...) {
@@ -52,9 +51,17 @@ static void error_at(char *loc, char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     verror_at(line_no, loc, fmt, ap);
+    exit(1);
 }
 
 void error_tok(Token *tok, char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(tok->line_no, tok->loc, fmt, ap);
+    exit(1);
+}
+
+void warn_tok(Token *tok, char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     verror_at(tok->line_no, tok->loc, fmt, ap);
@@ -121,7 +128,8 @@ static int from_hex(char c) {
 static bool is_keyword(Token *tok) {
     static char *kw[] = {
         "return", "if", "else", "for", "while", "int", "sizeof", "char",
-        "struct", "union",
+        "struct", "union", "short", "long", "void", "typedef", "_Bool",
+        "enum", "static",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -205,6 +213,26 @@ static Token *read_string_literal(Token *cur, char *start) {
     return tok;
 }
 
+static Token *read_char_literal(Token *cur, char *start) {
+    char *p = start + 1;
+    if (*p == '\0')
+        error_at(start, "unclosed char literal");
+
+    char c;
+    if (*p == '\\')
+        c = read_escaped_char(&p, p + 1);
+    else
+        c = *p++;
+
+    if (*p != '\'')
+        error_at(p, "char literal too long");
+    p++;
+
+    Token *tok = new_token(TK_NUM, cur, start, p - start);
+    tok->val = c;
+    return tok;
+}
+
 static void convert_keywords(Token *tok) {
     for (Token *t = tok; t->kind != TK_EOF; t = t->next)
         if (t->kind == TK_IDENT && is_keyword(t))
@@ -273,6 +301,13 @@ static Token *tokenize(char *filename, char *p) {
             continue;
         }
 
+        // Character literal
+        if (*p == '\'') {
+            cur = read_char_literal(cur, p);
+            p += cur->len;
+            continue;
+        }
+
         // Identifier
         if (is_alpha(*p)) {
             char *q = p++;
@@ -285,7 +320,10 @@ static Token *tokenize(char *filename, char *p) {
         // Multi-letter punctuators
         if (startswith(p, "==") || startswith(p, "!=") ||
             startswith(p, "<=") || startswith(p, ">=") ||
-            startswith(p, "->")) {
+            startswith(p, "->") || startswith(p, "+=") ||
+            startswith(p, "-=") || startswith(p, "*=") ||
+            startswith(p, "/=") || startswith(p, "++") ||
+            startswith(p, "--")) {
             cur = new_token(TK_RESERVED, cur, p, 2);
             p += 2;
             continue;
