@@ -487,6 +487,9 @@ int main() {
   assert(4, sizeof(!(char)0), "sizeof(!(char)0)");
   assert(4, sizeof(!(long)0), "sizeof(!(long)0)");
 
+  assert(-1, ~0, "~0");
+  assert(0, ~-1, "~-1");
+
   // assert(, ({}), "({})");
 
   printf("OK\n");
