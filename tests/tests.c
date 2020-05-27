@@ -521,6 +521,8 @@ int main() {
   assert(1, 1&&5, "1&&5");
   assert(1, 1&&5&&3&&4, "1&&5&&3&&4");
 
+  assert(8, sizeof(int(*)[10]), "sizeof(int(*)[10])");
+  assert(8, sizeof(int(*)[][10]), "sizeof(int(*)[][10])");
 
   // assert(, ({}), "({})");
 
