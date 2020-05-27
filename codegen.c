@@ -201,19 +201,19 @@ static void gen_expr(Node *node) {
         printf("  not %s\n", reg(top - 1));
         return;
     case ND_LOGAND: {
-        int seq = labelseq++;
-        gen_expr(node->lhs);
-        printf("  cmp %s, 0\n", reg(--top));
+        int seq = labelseq++; // The following comments describe the behavior in the case of a stack machine.
+        gen_expr(node->lhs); // push rax in the gen_expr
+        printf("  cmp %s, 0\n", reg(--top)); // pop rax
         printf("  je .L.false.%d\n", seq);
-        gen_expr(node->rhs);
-        printf("  cmp %s, 0\n", reg(--top));
+        gen_expr(node->rhs); // push rax in the gen_expr
+        printf("  cmp %s, 0\n", reg(--top)); // pop rax
         printf("  je .L.false.%d\n", seq);
-        printf("  mov %s, 1\n", reg(top));
+        printf("  mov %s, 1\n", reg(top)); // mov rax, 1 (no push/pop)
         printf("  jmp .L.end.%d\n", seq);
         printf(".L.false.%d:\n", seq);
-        printf("  mov %s, 0\n", reg(top++));
-        printf(".L.end.%d:\n", seq);
-        return;
+        printf("  mov %s, 0\n", reg(top++)); // mov rax, 0 (no push/pop)
+        printf(".L.end.%d:\n", seq); // ".L.end.seq:" then "push rax" (rax have the value of the expression)
+        return; // In the end, a one value will be remain in the stack.
     }
     case ND_LOGOR: {
         int seq = labelseq++;
