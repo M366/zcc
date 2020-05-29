@@ -1,12 +1,14 @@
 #include "zcc.h"
 
-static int top;
+static int top; // = 0
 static int labelseq = 1;
+static int brkseq; // = 0
+static int contseq; // = 0
 static char *argreg8[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"};
 static char *argreg16[] = {"di", "si", "dx", "cx", "r8w", "r9w"};
 static char *argreg32[] = {"edi", "esi", "edx", "ecx", "r8d", "r9d"};
 static char *argreg64[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
-static Function *current_fn;
+static Function *current_fn; // = NULL
 
 static char *reg(int idx) {
     static char *r[] = {"r10", "r11", "r12", "r13", "r14", "r15"};
@@ -131,6 +133,20 @@ static void cast(Type *from, Type *to) {
         printf("  movsx %s, %sd\n", r, r);
 }
 
+static void divmod(Node *node, char *rd, char *rs, char *r64, char *r32) {
+    if (size_of(node->ty) == 8) {
+        printf("  mov rax, %s\n", rd);
+        printf("  cqo\n");
+        printf("  idiv %s\n", rs);
+        printf("  mov %s, %s\n", rd, r64);
+    } else {
+        printf("  mov eax, %s\n", rd);
+        printf("  cdq\n");
+        printf("  idiv %s\n", rs);
+        printf("  mov %s, %s\n", rd, r32);
+    }
+}
+
 // Generate code for a given node.
 static void gen_expr(Node *node) {
     printf(".loc 1 %d\n", node->tok->line_no);
@@ -176,6 +192,46 @@ static void gen_expr(Node *node) {
         gen_expr(node->lhs);
         cast(node->lhs->ty, node->ty);
         return;
+    case ND_NOT:
+        gen_expr(node->lhs);
+        printf("  cmp %s, 0\n", reg(top - 1));
+        printf("  sete %sb\n", reg(top - 1));
+        printf("  movzx %s, %sb\n", reg(top - 1), reg(top - 1));
+        return;
+    case ND_BITNOT:
+        gen_expr(node->lhs);
+        printf("  not %s\n", reg(top - 1));
+        return;
+    case ND_LOGAND: {
+        int seq = labelseq++; // The following comments describe the behavior in the case of a stack machine.
+        gen_expr(node->lhs); // push rax in the gen_expr
+        printf("  cmp %s, 0\n", reg(--top)); // pop rax
+        printf("  je .L.false.%d\n", seq);
+        gen_expr(node->rhs); // push rax in the gen_expr
+        printf("  cmp %s, 0\n", reg(--top)); // pop rax
+        printf("  je .L.false.%d\n", seq);
+        printf("  mov %s, 1\n", reg(top)); // mov rax, 1 (no push/pop)
+        printf("  jmp .L.end.%d\n", seq);
+        printf(".L.false.%d:\n", seq);
+        printf("  mov %s, 0\n", reg(top++)); // mov rax, 0 (no push/pop)
+        printf(".L.end.%d:\n", seq); // ".L.end.seq:" then "push rax" (rax have the value of the expression)
+        return; // In the end, a one value will be remain in the stack.
+    }
+    case ND_LOGOR: {
+        int seq = labelseq++;
+        gen_expr(node->lhs);
+        printf("  cmp %s, 0\n", reg(--top));
+        printf("  jne .L.true.%d\n", seq);
+        gen_expr(node->rhs);
+        printf("  cmp %s, 0\n", reg(--top));
+        printf("  jne .L.true.%d\n", seq);
+        printf("  mov %s, 0\n", reg(top));
+        printf("  jmp .L.end.%d\n", seq);
+        printf(".L.true.%d:\n", seq);
+        printf("  mov %s, 1\n", reg(top++));
+        printf(".L.end.%d:\n", seq);
+        return;
+    }
     case ND_FUNCALL: {
         // Save caller-saved registers
         printf("  push r10\n");
@@ -224,17 +280,19 @@ static void gen_expr(Node *node) {
         printf("  imul %s, %s\n", rd, rs);
         return;
     case ND_DIV:
-        if (size_of(node->ty) == 8) {
-            printf("  mov rax, %s\n", rd);
-            printf("  cqo\n");
-            printf("  idiv %s\n", rs);
-            printf("  mov %s, rax\n", rd);
-        } else {
-            printf("  mov eax, %s\n", rd);
-            printf("  cdq\n");
-            printf("  idiv %s\n", rs);
-            printf("  mov %s, eax\n", rd);
-        }
+        divmod(node, rd, rs, "rax", "eax");
+        return;
+    case ND_MOD:
+        divmod(node, rd, rs, "rdx", "edx");
+        return;
+    case ND_BITAND:
+        printf("  and %s, %s\n", rd, rs); // and op1, op2 => op1 = op1 & op2
+        return;
+    case ND_BITOR:
+        printf("  or %s, %s\n", rd, rs);
+        return;
+    case ND_BITXOR:
+        printf("  xor %s, %s\n", rd, rs);
         return;
     case ND_EQ:
         printf("  cmp %s, %s\n", rd, rs);
@@ -287,24 +345,83 @@ static void gen_stmt(Node *node) {
     }
     case ND_FOR: {
         int seq = labelseq++;
+        int brk = brkseq;
+        int cont = contseq;
+        brkseq = contseq = seq;
+
         if (node->init)
             gen_stmt(node->init);
         printf(".L.begin.%d:\n", seq);
         if (node->cond) {
             gen_expr(node->cond);
             printf("  cmp %s, 0\n", reg(--top));
-            printf("  je  .L.end.%d\n", seq);
+            printf("  je  .L.break.%d\n", seq);
         }
         gen_stmt(node->then);
+        printf(".L.continue.%d:\n", seq);
         if (node->inc)
             gen_stmt(node->inc);
         printf("  jmp .L.begin.%d\n", seq);
-        printf(".L.end.%d:\n", seq);
+        printf(".L.break.%d:\n", seq);
+
+        brkseq = brk;
+        contseq = cont;
         return;
     }
+    case ND_SWITCH: {
+        int seq = labelseq++;
+        int brk = brkseq;
+        brkseq = seq;
+        node->case_label = seq;
+
+        gen_expr(node->cond);
+
+        for (Node *n = node->case_next; n; n = n->case_next) {
+            n->case_label = labelseq++;
+            n->case_end_label = seq;
+            printf("  cmp %s, %ld\n", reg(top - 1), n->val);
+            printf("  je .L.case.%d\n", n->case_label);
+        }
+        top--;
+
+        if (node->default_case) {
+            int i = labelseq++;
+            node->default_case->case_end_label = seq;
+            node->default_case->case_label = i;
+            printf("  jmp .L.case.%d\n", i);
+        }
+
+        printf("  jmp .L.break.%d\n", seq);
+        gen_stmt(node->then);
+        printf(".L.break.%d:\n", seq);
+
+        brkseq = brk;
+        return;
+    }
+    case ND_CASE:
+        printf(".L.case.%d:\n", node->case_label);
+        gen_stmt(node->lhs);
+        return;
     case ND_BLOCK:
         for (Node *n = node->body; n; n = n->next)
             gen_stmt(n);
+        return;
+    case ND_BREAK:
+        if (brkseq == 0)
+            error_tok(node->tok, "stray break");
+        printf("  jmp .L.break.%d\n", brkseq);
+        return;
+    case ND_CONTINUE:
+        if (contseq == 0)
+            error_tok(node->tok, "stray continue");
+        printf("  jmp .L.continue.%d\n", contseq);
+        return;
+    case ND_GOTO:
+        printf("  jmp .L.label.%s.%s\n", current_fn->name, node->label_name);
+        return;
+    case ND_LABEL:
+        printf(".L.label.%s.%s:\n", current_fn->name, node->label_name);
+        gen_stmt(node->lhs);
         return;
     case ND_RETURN:
         gen_expr(node->lhs);
@@ -331,7 +448,7 @@ static void emit_data(Program *prog) {
             continue;
         }
 
-        for (int i = 0; i < var->ty->size; i++)
+        for (int i = 0; i < size_of(var->ty); i++)
             printf("  .byte %d\n", var->init_data[i]);
     }
 }

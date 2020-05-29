@@ -76,6 +76,8 @@ _Bool bool_fn_sub(_Bool x) { return x - 1; }
 
 static int static_fn() { return 3; }
 
+int param_decay(int x[]) { return x[0]; }
+
 int main() {
   assert(0, 0, "0");
   assert(42, 42, "42");
@@ -466,6 +468,95 @@ int main() {
   assert(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[1]; }), "({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[1]; })");
   assert(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[2]; }), "({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[2]; })");
   assert(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; *p; }), "({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; *p; })");
+
+  assert(511, 0777, "0777");
+  assert(0, 0x0, "0x0");
+  assert(10, 0xa, "0xa");
+  assert(10, 0XA, "0XA");
+  assert(48879, 0xbeef, "0xbeef");
+  assert(48879, 0xBEEF, "0xBEEF");
+  assert(48879, 0XBEEF, "0XBEEF");
+  assert(0, 0b0, "0b0");
+  assert(1, 0b1, "0b1");
+  assert(47, 0b101111, "0b101111");
+  assert(47, 0B101111, "0B101111");
+
+  assert(0, !1, "!1");
+  assert(0, !2, "!2");
+  assert(1, !0, "!0");
+  assert(1, !(char)0, "!(char)0");
+  assert(0, !(long)3, "!(long)3");
+  assert(4, sizeof(!(char)0), "sizeof(!(char)0)");
+  assert(4, sizeof(!(long)0), "sizeof(!(long)0)");
+
+  assert(-1, ~0, "~0");
+  assert(0, ~-1, "~-1");
+
+  assert(5, 17%6, "17%6");
+  assert(5, ((long)17)%6, "((long)17)%6");
+  assert(2, ({ int i=10; i%=4; i; }), "({ int i=10; i%=4; i; })");
+  assert(2, ({ long i=10; i%=4; i; }), "({ long i=10; i%=4; i; })");
+
+  assert(0, 0&1, "0&1");
+  assert(1, 3&1, "3&1");
+  assert(3, 7&3, "7&3");
+  assert(10, -1&10, "-1&10");
+
+  assert(1, 0|1, "0|1");
+  assert(0b10011, 0b10000|0b00011, "0b10000|0b00011");
+
+  assert(0, 0^0, "0^0");
+  assert(0, 0b1111^0b1111, "0b1111^0b1111");
+  assert(0b110100, 0b111000^0b001100, "0b111000^0b001100");
+
+  assert(2, ({ int i=6; i&=3; i; }), "({ int i=6; i&=3; i; })");
+  assert(7, ({ int i=6; i|=3; i; }), "({ int i=6; i|=3; i; })");
+  assert(10, ({ int i=15; i^=5; i; }), "({ int i=15; i^=5; i; })");
+
+  assert(1, 0||1, "0||1");
+  assert(1, 0||(2-2)||5, "0||(2-2)||5");
+  assert(0, 0||0, "0||0");
+  assert(0, 0||(2-2), "0||(2-2)");
+
+  assert(0, 0&&1, "0&&1");
+  assert(0, (2-2)&&5, "(2-2)&&5");
+  assert(1, 1&&5, "1&&5");
+  assert(1, 1&&5&&3&&4, "1&&5&&3&&4");
+
+  assert(8, sizeof(int(*)[10]), "sizeof(int(*)[10])");
+  assert(8, sizeof(int(*)[][10]), "sizeof(int(*)[][10])");
+  
+  assert(3, ({ int x[2]; x[0]=3; param_decay(x); }), "({ int x[2]; x[0]=3; param_decay(x); })");
+
+  assert(8, ({ struct foo *bar; sizeof(bar); }), "({ struct foo *bar; sizeof(bar); })");
+  assert(4, ({ struct T *foo; struct T {int x;}; sizeof(struct T); }), "({ struct T *foo; struct T {int x;}; sizeof(struct T); })");
+  assert(1, ({ struct T { struct T *next; int x; } a; struct T b; b.x=1; a.next=&b; a.next->x; }), "({ struct T { struct T *next; int x; } a; struct T b; b.x=1; a.next=&b; a.next->x; })");
+  assert(4, ({ typedef struct T T; struct T { int x; }; sizeof(T); }), "({ typedef struct T T; struct T { int x; }; sizeof(T); })");
+ 
+  assert(3, ({ int i=0; for(;i<10;i++) { if (i == 3) break; } i; }), "({ int i=0; for(;i<10;i++) { if (i == 3) break; } i; })");
+  assert(4, ({ int i=0; while (1) { if (i++ == 3) break; } i; }), "({ int i=0; while (1) { if (i++ == 3) break; } i; })");
+  assert(3, ({ int i=0; for(;i<10;i++) { for (;;) break; if (i == 3) break; } i; }), "({ int i=0; for(;i<10;i++) { for (;;) break; if (i == 3) break; } i; })");
+  assert(4, ({ int i=0; while (1) { while(1) break; if (i++ == 3) break; } i; }), "({ int i=0; while (1) { while(1) break; if (i++ == 3) break; } i; })");
+
+  assert(10, ({ int i=0; int j=0; for (;i<10;i++) { if (i>5) continue; j++; } i; }), "({ int i=0; int j=0; for (;i<10;i++) { if (i>5) continue; j++; } i; })");
+  assert(6, ({ int i=0; int j=0; for (;i<10;i++) { if (i>5) continue; j++; } j; }), "({ int i=0; int j=0; for (;i<10;i++) { if (i>5) continue; j++; } j; })");
+  assert(10, ({ int i=0; int j=0; for(;!i;) { for (;j!=10;j++) continue; break; } j; }), "({ int i=0; int j=0; for(;!i;) { for (;j!=10;j++) continue; break; } j; })");
+  assert(11, ({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } i; }), "({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } i; })");
+  assert(5, ({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } j; }), "({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } j; })");
+  assert(11, ({ int i=0; int j=0; while(!i) { while (j++!=10) continue; break; } j; }), "({ int i=0; int j=0; while(!i) { while (j++!=10) continue; break; } j; })");
+
+  assert(3, ({ int i=0; goto a; a: i++; b: i++; c: i++; i; }), "({ int i=0; goto a; a: i++; b: i++; c: i++; i; })");
+  assert(2, ({ int i=0; goto e; d: i++; e: i++; f: i++; i; }), "({ int i=0; goto e; d: i++; e: i++; f: i++; i; })");
+  assert(1, ({ int i=0; goto i; g: i++; h: i++; i: i++; i; }), "({ int i=0; goto i; g: i++; h: i++; i: i++; i; })");
+
+  assert(5, ({ int i=0; switch(0) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }), "({ int i=0; switch(0) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; })");
+  assert(6, ({ int i=0; switch(1) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }), "({ int i=0; switch(1) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; })");
+  assert(7, ({ int i=0; switch(2) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }), "({ int i=0; switch(2) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; })");
+  assert(0, ({ int i=0; switch(3) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }), "({ int i=0; switch(3) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; })");
+  assert(5, ({ int i=0; switch(0) { case 0:i=5;break; default:i=7; } i; }), "({ int i=0; switch(0) { case 0:i=5;break; default:i=7; } i; })");
+  assert(7, ({ int i=0; switch(1) { case 0:i=5;break; default:i=7; } i; }), "({ int i=0; switch(1) { case 0:i=5;break; default:i=7; } i; })");
+  assert(2, ({ int i=0; switch(1) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }), "({ int i=0; switch(1) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; })");
+  assert(0, ({ int i=0; switch(3) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }), "({ int i=0; switch(3) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; })");
 
   // assert(, ({}), "({})");
 

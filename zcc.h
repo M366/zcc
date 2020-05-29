@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 typedef struct Type Type;
 typedef struct Member Member;
@@ -72,6 +73,10 @@ typedef enum {
     ND_SUB,       // -
     ND_MUL,       // *
     ND_DIV,       // /
+    ND_MOD,       // % modulo
+    ND_BITAND,    // &
+    ND_BITOR,     // |
+    ND_BITXOR,    // ^
     ND_EQ,        // ==
     ND_NE,        // !=
     ND_LT,        // < less than
@@ -81,10 +86,20 @@ typedef enum {
     ND_MEMBER,    // . (struct member access);
     ND_ADDR,      // unary &
     ND_DEREF,     // unary *
+    ND_NOT,       // !
+    ND_BITNOT,    // ~
+    ND_LOGAND,    // && logical and
+    ND_LOGOR,     // || logical or
     ND_RETURN,    // "return"
     ND_IF,        // "if"
     ND_FOR,       // "for" or "while"
+    ND_SWITCH,    // "switch"
+    ND_CASE,      // "case"
     ND_BLOCK,     // { ... }
+    ND_BREAK,     // "break"
+    ND_CONTINUE,  // "continue"
+    ND_GOTO,      // "goto"
+    ND_LABEL,     // Labeled statement
     ND_FUNCALL,   // Function call
     ND_EXPR_STMT, // Expression statement
     ND_STMT_EXPR, // Statement expression (GCC extention)
@@ -124,8 +139,20 @@ struct Node {
     Var **args;
     int nargs;
 
-    Var *var;      // Used if kind == ND_VAR
-    long val;      // Used if kind == ND_NUM
+    // Goto or labeled statement
+    char *label_name;
+
+    // Switch-cases
+    Node *case_next;
+    Node *default_case;
+    int case_label;
+    int case_end_label;
+
+    // Variable
+    Var *var;
+
+    // Numeric literal
+    long val;
 };
 
 typedef struct Function Function;
@@ -168,8 +195,9 @@ typedef enum {
 
 struct Type {
     TypeKind kind;
-    int size;      // sizeof() value
-    int align;     // alignment
+    int size;           // sizeof() value
+    int align;          // alignment
+    bool is_incomplete; // incomplete type
 
     // Pointer-to or array-of type. We intentionally use the same member
     // to represent pointer/array duality in C.
@@ -200,6 +228,7 @@ struct Type {
 struct Member {
     Member *next;
     Type *ty;
+    Token *tok; // for error message
     Token *name;
     int offset;
 };
@@ -219,6 +248,7 @@ Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
 Type *enum_type(void);
+Type *struct_type(void);
 int size_of(Type *ty);
 void add_type(Node *node);
 

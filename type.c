@@ -60,9 +60,15 @@ Type *enum_type(void) {
     return new_type(TY_ENUM, 4, 4);
 }
 
+Type *struct_type(void) {
+    return new_type(TY_STRUCT, 0, 1);
+}
+
 int size_of(Type *ty) {
     if (ty->kind == TY_VOID)
         error_tok(ty->name, "void type");
+    if (ty->is_incomplete)
+        error_tok(ty->name, "incomplete type");
     return ty->size;
 }
 
@@ -110,6 +116,10 @@ void add_type(Node *node) {
     case ND_SUB:
     case ND_MUL:
     case ND_DIV:
+    case ND_MOD:
+    case ND_BITAND:
+    case ND_BITOR:
+    case ND_BITXOR:
         usual_arith_conv(&node->lhs, &node->rhs);
         node->ty = node->lhs->ty;
         return;
@@ -123,6 +133,14 @@ void add_type(Node *node) {
     case ND_ASSIGN:
         if (is_scalar(node->rhs->ty))
             node->rhs = new_cast(node->rhs, node->lhs->ty);
+        node->ty = node->lhs->ty;
+        return;
+    case ND_NOT:
+    case ND_LOGOR:
+    case ND_LOGAND:
+        node->ty = ty_int;
+        return;
+    case ND_BITNOT:
         node->ty = node->lhs->ty;
         return;
     case ND_VAR:

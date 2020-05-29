@@ -66,9 +66,14 @@ static int scope_depth;
 // Points to the function object the parser is currently parsing.
 static Var *current_fn;
 
+// Points to a node representing a switch if we are parsing
+// a switch statement. Otherwise, NULL.
+static Node *current_switch;
+
 static bool is_typename(Token *tok);
 static Type *typespec(Token **rest, Token *tok, VarAttr *attr);
 static Type *enum_specifier(Token **rest, Token *tok);
+static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
 static Node *declaration(Token **rest, Token *tok);
 static Node *compound_stmt(Token **rest, Token *tok);
@@ -76,6 +81,11 @@ static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
 static Node *assign(Token **rest, Token *tok);
+static Node *logor(Token **rest, Token *tok);
+static Node *logand(Token **rest, Token *tok);
+static Node *bitor(Token **rest, Token *tok);
+static Node *bitxor(Token **rest, Token *tok);
+static Node *bitand(Token **rest, Token *tok);
 static Node *equality(Token **rest, Token *tok);
 static Node *relational(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
@@ -392,9 +402,19 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     while (!equal(tok, ")")) {
         if (cur != &head)
             tok = skip(tok, ",");
-        Type *basety = typespec(&tok, tok, NULL);
-        Type *ty = declarator(&tok, tok, basety);
-        cur = cur->next = copy_type(ty);
+
+        Type *ty2 = typespec(&tok, tok, NULL);
+        ty2 = declarator(&tok, tok, ty2);
+
+        // "array of T" is converted to "pointer to T" only in the parameter
+        // context. For example, *argv[] is converted to **argv by this.
+        if (ty2->kind == TY_ARRAY) {
+            Token *name = ty2->name;
+            ty2 = pointer_to(ty2->base);
+            ty2->name = name;
+        }
+
+        cur = cur->next = copy_type(ty2);
     }
 
     ty = func_type(ty);
@@ -403,19 +423,30 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     return ty;
 }
 
+// array-dimensions = num? "]" type-suffix
+static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
+    if (equal(tok, "]")) {
+        ty = type_suffix(rest, tok->next, ty);
+        ty = array_of(ty, 0);
+        ty->is_incomplete = true;
+        return ty;
+    }
+
+    int sz = get_number(tok);
+    tok = skip(tok->next, "]");
+    ty = type_suffix(rest, tok, ty);
+    return array_of(ty, sz);
+}
+
 // type-suffix = "(" func-params
-//             | "[" num "]" type-suffix
+//             | "[" array-dimensions
 //             | ε
 static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
     if (equal(tok, "("))
         return func_params(rest, tok->next, ty);
 
-    if (equal(tok, "[")) {
-        int sz = get_number(tok->next);
-        tok = skip(tok->next->next, "]");
-        ty = type_suffix(rest, tok, ty);
-        return array_of(ty, sz);
-    }
+    if (equal(tok, "["))
+        return array_dimensions(rest, tok->next, ty);
 
     *rest = tok;
     return ty;
@@ -572,8 +603,15 @@ static bool is_typename(Token *tok) {
 
 // stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
+//      | "switch" "(" expr ")" stmt
+//      | "case" num ":" stmt
+//      | "default" ":" stmt
 //      | "for" "(" (expr? ";" | declaration) expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
+//      | "break" ";"
+//      | "continue" ";"
+//      | "goto" ident ";"
+//      | ident ":" stmt
 //      | "{" compound-stmt
 //      | expr ";"
 static Node *stmt(Token **rest, Token *tok) {
@@ -596,6 +634,44 @@ static Node *stmt(Token **rest, Token *tok) {
         if (equal(tok, "else"))
             node->els = stmt(&tok, tok->next);
         *rest = tok;
+        return node;
+    }
+
+    if (equal(tok, "switch")) {
+        Node *node = new_node(ND_SWITCH, tok);
+        tok = skip(tok->next, "(");
+        node->cond = expr(&tok, tok);
+        tok = skip(tok, ")");
+
+        Node *sw = current_switch;
+        current_switch = node;
+        node->then = stmt(rest, tok);
+        current_switch = sw;
+        return node;
+    }
+
+    if (equal(tok, "case")) {
+        if (!current_switch)
+            error_tok(tok, "stray case");
+        int val = get_number(tok->next);
+
+        Node *node = new_node(ND_CASE, tok);
+        tok = skip(tok->next->next, ":");
+        node->lhs = stmt(rest, tok);
+        node->val = val;
+        node->case_next = current_switch->case_next;
+        current_switch->case_next = node;
+        return node;
+    }
+
+    if (equal(tok, "default")) {
+        if (!current_switch)
+            error_tok(tok, "stray default");
+        
+        Node *node = new_node(ND_CASE, tok);
+        tok = skip(tok->next, ":");
+        node->lhs = stmt(rest, tok);
+        current_switch->default_case = node;
         return node;
     }
 
@@ -626,12 +702,36 @@ static Node *stmt(Token **rest, Token *tok) {
         return node;
     }
 
-    if (equal(tok, "while")) {
+    if (equal(tok, "while")) { // "while" is the same as "for" without init and inc
         Node *node = new_node(ND_FOR, tok);
         tok = skip(tok->next, "(");
         node->cond = expr(&tok, tok);
         tok = skip(tok, ")");
         node->then = stmt(rest, tok);
+        return node;
+    }
+
+    if (equal(tok, "break")) {
+        *rest = skip(tok->next, ";");
+        return new_node(ND_BREAK, tok);
+    }
+
+    if (equal(tok, "continue")) {
+        *rest = skip(tok->next, ";");
+        return new_node(ND_CONTINUE, tok);
+    }
+
+    if (equal(tok, "goto")) {
+        Node *node = new_node(ND_GOTO, tok);
+        node->label_name = get_ident(tok->next);
+        *rest = skip(tok->next->next, ";");
+        return node;
+    }
+
+    if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
+        Node *node = new_node(ND_LABEL, tok);
+        node->label_name = strndup(tok->loc, tok->len);
+        node->lhs = stmt(rest, tok->next->next);
         return node;
     }
 
@@ -708,10 +808,10 @@ static Node *to_assign(Node *binary) {
     return new_binary(ND_COMMA, expr1, expr2, tok);
 }
 
-// assign    = equality (assign-op assign)?
-// assign-op = "=" | "+=" | "-=" | "*=" | "/=" 
+// assign    = logor (assign-op assign)?
+// assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
 static Node *assign(Token **rest, Token *tok) {
-    Node *node = equality(&tok, tok);
+    Node *node = logor(&tok, tok);
 
     if (equal(tok, "="))
         return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
@@ -728,6 +828,72 @@ static Node *assign(Token **rest, Token *tok) {
     if (equal(tok, "/="))
         return to_assign(new_binary(ND_DIV, node, assign(rest, tok->next), tok));
 
+    if (equal(tok, "%="))
+        return to_assign(new_binary(ND_MOD, node, assign(rest, tok->next), tok));
+
+    if (equal(tok, "&="))
+        return to_assign(new_binary(ND_BITAND, node, assign(rest, tok->next), tok));
+
+    if (equal(tok, "|="))
+        return to_assign(new_binary(ND_BITOR, node, assign(rest, tok->next), tok));
+
+    if (equal(tok, "^="))
+        return to_assign(new_binary(ND_BITXOR, node, assign(rest, tok->next), tok));
+
+    *rest = tok;
+    return node;
+}
+
+// logor = logand ("||" lonand)*
+static Node *logor(Token **rest, Token *tok) {
+    Node *node = logand(&tok, tok);
+    while (equal(tok, "||")) {
+        Token *start = tok;
+        node = new_binary(ND_LOGOR, node, logand(&tok, tok->next), start);
+    }
+    *rest = tok;
+    return node;
+}
+
+static Node *logand(Token **rest, Token *tok) {
+    Node *node = bitor(&tok, tok);
+    while (equal(tok, "&&")) {
+        Token *start = tok;
+        node = new_binary(ND_LOGAND, node, bitor(&tok, tok->next), start);
+    }
+    *rest = tok;
+    return node;
+}
+
+// bitor = bitxor ("|" bitxor)*
+static Node *bitor(Token **rest, Token *tok) {
+    Node *node = bitxor(&tok, tok);
+    while (equal(tok, "|")) {
+        Token *start = tok;
+        node = new_binary(ND_BITOR, node, bitxor(&tok, tok->next), start);
+    }
+    *rest = tok;
+    return node;
+}
+
+// bitxor = bitand ("^" bitand)*
+static Node *bitxor(Token **rest, Token *tok) {
+    Node *node = bitand(&tok, tok);
+    while (equal(tok, "^")) {
+        Token *start = tok;
+        node = new_binary(ND_BITXOR, node, bitand(&tok, tok->next), start);
+    }
+    *rest = tok;
+    return node;
+}
+
+// bitand = equality ("&" equality)*
+static Node *bitand(Token **rest, Token *tok) {
+    Node *node = equality(&tok, tok);
+    while (equal(tok, "&")) {
+        Token *start = tok;
+        node = new_binary(ND_BITAND, node, equality(&tok, tok->next), start);
+    }
     *rest = tok;
     return node;
 }
@@ -860,7 +1026,7 @@ static Node *add(Token **rest, Token *tok) {
     }
 }
 
-// mul = cast ("*" cast | "/" cast)*
+// mul = cast ("*" cast | "/" cast | "%=" cast)*
 static Node *mul(Token **rest, Token *tok) {
     Node *node = cast(&tok, tok);
 
@@ -874,6 +1040,11 @@ static Node *mul(Token **rest, Token *tok) {
 
         if (equal(tok, "/")) {
             node = new_binary(ND_DIV, node, cast(&tok, tok->next), start);
+            continue;
+        }
+
+        if (equal(tok, "%")) {
+            node = new_binary(ND_MOD, node, cast(&tok, tok->next), start);
             continue;
         }
 
@@ -896,7 +1067,7 @@ static Node *cast(Token **rest, Token *tok) {
     return unary(rest, tok);
 }
 
-// unary = ("+" | "-" | "*" | "&") cast
+// unary = ("+" | "-" | "*" | "&" | "!" | "~") cast
 //       | ("++" | "--") unary
 //       | postfix
 static Node *unary(Token **rest, Token *tok) {
@@ -911,6 +1082,12 @@ static Node *unary(Token **rest, Token *tok) {
     
     if (equal(tok, "*"))
         return new_unary(ND_DEREF, cast(rest, tok->next), tok);
+    
+    if (equal(tok, "!"))
+        return new_unary(ND_NOT, cast(rest, tok->next), tok);
+    
+    if (equal(tok, "~"))
+        return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
     
     // Read ++i as i+=1
     if (equal(tok, "++"))
@@ -957,21 +1134,36 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
     }
 
     if (tag && !equal(tok, "{")) { // etc. struct tag ident;
-        TagScope *sc = find_tag(tag);
-        if (!sc)
-            error_tok(tag, "unknown struct type");
         *rest = tok;
-        return sc->ty;
+
+        TagScope *sc = find_tag(tag);
+        if (sc)
+            return sc->ty;
+
+        Type *ty = struct_type();
+        ty->is_incomplete = true;
+        push_tag_scope(tag, ty);
+        return ty;
     }
 
-    // Construct a struct object. etc. struct tag { ... }
-    Type *ty = calloc(1, sizeof(Type));
-    ty->kind = TY_STRUCT;
-    ty->members = struct_members(rest, tok->next);
+    tok = skip(tok, "{");
 
-    // Register the struct type if a name was given.
-    if (tag)
+    // Construct a struct object. etc. struct tag { ... }
+    Type *ty = struct_type();
+    ty->members = struct_members(rest, tok);
+
+    if (tag) {
+        // If this is a redefinition, overwrite a previous type.
+        // Otherwise, register the struct type.
+        TagScope *sc = find_tag(tag);
+        if (sc && sc->depth == scope_depth) {
+            *sc->ty = *ty;
+            return sc->ty;
+        }
+
         push_tag_scope(tag, ty);
+    }
+
     return ty;
 }
 
