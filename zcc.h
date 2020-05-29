@@ -84,6 +84,7 @@ typedef enum {
     ND_LT,        // < less than
     ND_LE,        // <= less than equal
     ND_ASSIGN,    // =
+    ND_COND,      // ?: conditional operator
     ND_COMMA,     // ,
     ND_MEMBER,    // . (struct member access)
     ND_ADDR,      // unary &
