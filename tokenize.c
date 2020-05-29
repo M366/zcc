@@ -241,7 +241,7 @@ static Token *read_int_literal(Token *cur, char *start) {
     if (!strncasecmp(p, "0x", 2) && is_alnum(p[2])) {
         p += 2;
         base = 16;
-    } else if (!strncasecmp(p, "0b", 2) && is_alnum(p[2])) {
+    } else if (!strncasecmp(p, "0b", 2) && is_alnum(p[2])) { // 0b prefix is GCC extension
         p += 2;
         base = 2;
     } else if (*p == '0') {
