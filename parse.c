@@ -835,6 +835,16 @@ static void write_gvar_data(Initializer *init, Type *ty, char *buf, int offset) 
         return;
     }
 
+    if (ty->kind == TY_STRUCT) {
+        int i = 0;
+        for (Member *mem = ty->members; mem; mem = mem->next, i++) {
+            Initializer *child = init->children[i];
+            if (child)
+                write_gvar_data(child, mem->ty, buf, offset + mem->offset);
+        }
+        return;
+    }
+
     write_buf(buf + offset, eval(init->expr), size_of(ty));
 }
 
@@ -844,8 +854,8 @@ static void write_gvar_data(Initializer *init, Type *ty, char *buf, int offset) 
 // initializer list contains a non-constant expression.
 static char *gvar_initializer(Token **rest, Token *tok, Type *ty) {
     Initializer *init = initializer(rest, tok, ty);
-    char *buf = calloc(1, size_of(ty));
-    write_gvar_data(init, ty, buf, 0);
+    char *buf = calloc(1, size_of(ty)); // All of buf are initialized to zero here, 
+    write_gvar_data(init, ty, buf, 0);  // so initializer don't have to fill buf.
     return buf;
 }
 
