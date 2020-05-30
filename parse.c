@@ -628,6 +628,24 @@ static Node *declaration(Token **rest, Token *tok) {
     return node;
 }
 
+static Token *skip_excess_elements(Token *tok) {
+    while (!equal(tok, "}")) {
+        tok = skip(tok, ",");
+        if (equal(tok, "{"))
+            tok = skip_excess_elements(tok->next);
+        else
+            assign(&tok, tok);
+    }
+    return tok;
+}
+
+static Token *skip_end(Token *tok) {
+    if (equal(tok, "}"))
+        return tok->next;
+    warn_tok(tok, "excess elements in initializer");
+        return skip_excess_elements(tok);
+}
+
 // initializer = "{" initializer ("," initializer)* "}"
 //             | assign
 static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
@@ -640,7 +658,7 @@ static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
                 tok = skip(tok, ",");
             init->children[i] = initializer(&tok, tok, ty->base);
         }
-        *rest = skip(tok, "}");
+        *rest = skip_end(tok);
         return init;
     }
 
@@ -669,8 +687,8 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
         return node;
     }
 
-    Node *lhs = init_desg_expr(desg, tok);
-    Node *rhs = init ? init->expr : new_num(0, tok);
+    Node *lhs = init_desg_expr(desg, tok); // lvar: var or array element as `*(pointer + idx)`
+    Node *rhs = init ? init->expr : new_num(0, tok); // 
     return new_binary(ND_ASSIGN, lhs, rhs, tok);
 }
 
