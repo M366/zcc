@@ -399,7 +399,7 @@ static void gen_stmt(Node *node) {
 
         for (Node *n = node->case_next; n; n = n->case_next) {
             n->case_label = labelseq++;
-            n->case_end_label = seq;
+            // n->case_end_label = seq; // is not used
             printf("  cmp %s, %ld\n", reg(top - 1), n->val);
             printf("  je .L.case.%d\n", n->case_label);
         }
@@ -407,7 +407,7 @@ static void gen_stmt(Node *node) {
 
         if (node->default_case) {
             int i = labelseq++;
-            node->default_case->case_end_label = seq;
+            // node->default_case->case_end_label = seq; // is not used.
             node->default_case->case_label = i;
             printf("  jmp .L.case.%d\n", i);
         }
