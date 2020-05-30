@@ -1,25 +1,25 @@
 // This file contains a recursive descent parser for C.
-// See original text: https://github.com/rui314/course2020
 //
+// Most functions in this file are named after the symbols they are
+// supposed to read from an input token list. For example, stmt() is
+// responsible for reading a statement from a token list. The function
+// then construct an AST node representing a statement.
 //
+// Each function conceptually returns two values, an AST node and
+// remaining part of the input tokens. Since C doesn't support
+// multiple return values, the remaining tokens are returned to the
+// caller via a pointer argument.
 //
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
+// Input tokens are represented by a linked list. Unlike many recursive
+// descent parsers, we don't have the notion of the "input token stream".
+// Most parsing functions don't change the global state of the parser.
+// So it is very easy to lookahead arbitrary number of tokens in this
+// parser.
 
 #include "zcc.h"
 
-// Scope for local variables, or global variables, or typedefs
-// or enum constants.
+// Scope for local variables, global variables, typedefs
+// or enum constants
 typedef struct VarScope VarScope;
 struct VarScope {
     VarScope *next;
@@ -32,7 +32,7 @@ struct VarScope {
     int enum_val;
 };
 
-// Scope for struct, or union or enum tags
+// Scope for struct, union or enum tags
 typedef struct TagScope TagScope;
 struct TagScope {
     TagScope *next;
@@ -41,7 +41,7 @@ struct TagScope {
     Type *ty;
 };
 
-// Variable attributes such as typedef or extern
+// Variable attributes such as typedef or extern.
 typedef struct {
     bool is_typedef;
     bool is_static;
@@ -75,6 +75,7 @@ typedef struct InitDesg InitDesg;
 struct InitDesg { // initializer designer
     InitDesg *next;
     int idx;
+    Member *member;
     Var *var;
 };
 
@@ -85,7 +86,7 @@ static Var *locals;
 // Likewise, global variables are accumulated to this list.
 static Var *globals;
 
-// C has two block scopes; one is for variables/typedef and
+// C has two block scopes; one is for variables/typedefs and
 // the other is for struct/union/enum tags.
 static VarScope *var_scope;
 static TagScope *tag_scope;
@@ -328,7 +329,7 @@ static Function *funcdef(Token **rest, Token *tok) {
 // That can also be written as `static long` because you can omit
 // `int` if `long` or `short` are specified. However, something like
 // `char int` is not a valid type specifier. We have to accept only a
-// limited combinations of tye typenames.
+// limited combinations of the typenames.
 //
 // In this function, we count the number of occurrences of each typename
 // while keeping the "current" type object that the typenames up
@@ -544,7 +545,7 @@ static Type *typename(Token **rest, Token *tok) {
 }
 
 // enum-specifier = ident? "{" enum-list? "}"
-//                | ident? ("{" enum-list? "}")?
+//                | ident ("{" enum-list? "}")?
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)*
 static Type *enum_specifier(Token **rest, Token *tok) {
@@ -647,7 +648,7 @@ static Token *skip_end(Token *tok) {
     return skip_excess_elements(tok);
 }
 
-// staring-initializer = string-literal
+// string-initializer = string-literal
 static Initializer *string_initializer(Token **rest, Token *tok, Type *ty) {
     // Initialize a char array with a string literal.
     if (ty->is_incomplete) {
@@ -685,6 +686,7 @@ static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
         ty->array_len = i;
         ty->is_incomplete = false;
     }
+
     Initializer *init = new_init(ty, ty->array_len, NULL, tok);
 
     for (int i = 0; i < ty->array_len && !equal(tok, "}"); i++) {
@@ -696,7 +698,38 @@ static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
     return init;
 }
 
-// initializer = string-intializer | array-initializer | assign
+// struct-initializer = "{" initializer ("," initializer)* "}"
+static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
+    if (!equal(tok, "{")) { // e.g. struct tag x = num;
+        Token *tok2;
+        Node *expr = assign(&tok2, tok);
+        add_type(expr);
+        if (expr->ty->kind == TY_STRUCT) {
+            Initializer *init = new_init(ty, 0, expr, tok);
+            *rest = tok2;
+            return init;
+        }
+    }
+    // e.g. struct tag x = { ... };
+    int len = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next)
+        len++;
+    
+    Initializer *init = new_init(ty, len, NULL, tok);
+    tok = skip(tok, "{");
+
+    int i = 0;
+    for (Member *mem = ty->members; mem && !equal(tok, "}"); mem = mem->next, i++) {
+        if (i > 0)
+            tok = skip(tok, ",");
+        init->children[i] = initializer(&tok, tok, mem->ty);
+    }
+    *rest = skip_end(tok);
+    return init;
+}
+
+// initializer = string-initializer | array-initializer | struct-initializer
+//             | assign
 static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
     if (ty->kind == TY_ARRAY && ty->base->kind == TY_CHAR && tok->kind == TK_STR)
         return string_initializer(rest, tok, ty);
@@ -704,13 +737,21 @@ static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
     if (ty->kind == TY_ARRAY)
         return array_initializer(rest, tok, ty);
     
+    if (ty->kind == TY_STRUCT)
+        return struct_initializer(rest, tok, ty);
+    
     return new_init(ty, 0, assign(rest, tok), tok);
 }
-
 // initializer = "{" initializer ("," initializer)* "}"
 Node *init_desg_expr(InitDesg *desg, Token *tok) {
     if (desg->var)
         return new_var_node(desg->var, tok);
+    // struct
+    if (desg->member) {
+        Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
+        node->member = desg->member;
+        return node;
+    }
     // array
     Node *lhs = init_desg_expr(desg->next, tok);
     Node *rhs = new_num(desg->idx, tok);
@@ -730,27 +771,38 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
         return node;
     }
 
+    if (ty->kind == TY_STRUCT && (!init || init->len)) { // "!init" only check init is exist.
+        Node *node = new_node(ND_NULL_EXPR, tok);
+        int i = 0;
+        for (Member *mem = ty->members; mem; mem = mem->next, i++) {
+            InitDesg desg2 = {desg, 0, mem};
+            Initializer *child = init ? init->children[i] : NULL;
+            Node *rhs = create_lvar_init(child, mem->ty, &desg2, tok);
+            node = new_binary(ND_COMMA, node, rhs, tok);
+        }
+        return node;
+    }
+
     Node *lhs = init_desg_expr(desg, tok); // lvar: var or array element as `*(pointer + idx)`
-    Node *rhs = init ? init->expr : new_num(0, tok); // 
+    Node *rhs = init ? init->expr : new_num(0, tok);
     return new_binary(ND_ASSIGN, lhs, rhs, tok);
 }
 
 // A variable definition with an initializer is a shorthand notation
 // for a variable definition followed by assignments. This function
-// generates assignment expression for an initializer. For example,
+// generates assignment expressions for an initializer. For example,
 // `int x[2][2] = {{6, 7}, {8, 9}}` is converted to the following
 // expressions:
 //
-// x[0][0] = 6;
-// x[0][1] = 7;
-// x[1][0] = 8;
-// x[1][1] = 9;
+//   x[0][0] = 6;
+//   x[0][1] = 7;
+//   x[1][0] = 8;
+//   x[1][1] = 9;
 static Node *lvar_initializer(Token **rest, Token *tok, Var *var) {
     Initializer *init = initializer(rest, tok, var->ty);
-    InitDesg desg = {NULL, 0, var};
+    InitDesg desg = {NULL, 0, NULL, var}; // {InitDesg *next, int idx, Member *member, Var *var}
     return create_lvar_init(init, var->ty, &desg, tok);
 }
-
 
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
@@ -1096,7 +1148,7 @@ static Node *conditional(Token **rest, Token *tok) {
     return cond;
 }
 
-// logor = logand ("||" lonand)*
+// logor = logand ("||" logand)*
 static Node *logor(Token **rest, Token *tok) {
     Node *node = logand(&tok, tok);
     while (equal(tok, "||")) {
@@ -1107,6 +1159,7 @@ static Node *logor(Token **rest, Token *tok) {
     return node;
 }
 
+// logand = bitor ("&&" bitor)*
 static Node *logand(Token **rest, Token *tok) {
     Node *node = bitor(&tok, tok);
     while (equal(tok, "&&")) {
@@ -1300,7 +1353,7 @@ static Node *add(Token **rest, Token *tok) {
     }
 }
 
-// mul = cast ("*" cast | "/" cast | "%=" cast)*
+// mul = cast ("*" cast | "/" cast | "%" cast)*
 static Node *mul(Token **rest, Token *tok) {
     Node *node = cast(&tok, tok);
 
@@ -1407,7 +1460,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
         tok = tok->next;
     }
 
-    if (tag && !equal(tok, "{")) { // etc. struct tag ident;
+    if (tag && !equal(tok, "{")) { // e.g. struct tag ident;
         *rest = tok;
 
         TagScope *sc = find_tag(tag);
@@ -1422,7 +1475,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 
     tok = skip(tok, "{");
 
-    // Construct a struct object. etc. struct tag { ... }
+    // Construct a struct object. e.g. struct tag { ... }
     Type *ty = struct_type();
     ty->members = struct_members(rest, tok);
 
@@ -1668,7 +1721,7 @@ static Node *primary(Token **rest, Token *tok) {
         
         // Variable or enum constant
         VarScope *sc = find_var(tok);
-        if (!sc || (!sc->var && !sc->enum_ty)) // no scope or (no var and no enum) => error
+        if (!sc || (!sc->var && !sc->enum_ty))
             error_tok(tok, "undefined variable");
 
         Node *node;
