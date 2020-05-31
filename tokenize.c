@@ -241,7 +241,7 @@ static Token *read_int_literal(Token *cur, char *start) {
     if (!strncasecmp(p, "0x", 2) && is_alnum(p[2])) {
         p += 2;
         base = 16;
-    } else if (!strncasecmp(p, "0b", 2) && is_alnum(p[2])) {
+    } else if (!strncasecmp(p, "0b", 2) && is_alnum(p[2])) { // 0b prefix is GCC extension
         p += 2;
         base = 2;
     } else if (*p == '0') {
@@ -339,7 +339,14 @@ static Token *tokenize(char *filename, char *p) {
             continue;
         }
 
-        // Multi-letter punctuators
+        // Three-letter punctuators
+        if (startswith(p, "<<=") || startswith(p, ">>=")) {
+            cur = new_token(TK_RESERVED, cur, p, 3);
+            p += 3;
+            continue;
+        }
+
+        // Two-letter punctuators
         if (startswith(p, "==") || startswith(p, "!=") ||
             startswith(p, "<=") || startswith(p, ">=") ||
             startswith(p, "->") || startswith(p, "+=") ||
@@ -348,7 +355,8 @@ static Token *tokenize(char *filename, char *p) {
             startswith(p, "--") || startswith(p, "%=") ||
             startswith(p, "&=") || startswith(p, "|=") ||
             startswith(p, "^=") || startswith(p, "&&") ||
-            startswith(p, "||")) {
+            startswith(p, "||") || startswith(p, "<<") ||
+            startswith(p, ">>")) {
             cur = new_token(TK_RESERVED, cur, p, 2);
             p += 2;
             continue;

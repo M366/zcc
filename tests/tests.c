@@ -7,21 +7,47 @@
 
 int printf();
 int exit();
+int strcmp(char *p, char *q);
+int memcmp(char *p, char *q, int len);
 
 int g1, g2[4];
 
 typedef int MyInt, MyInt2[4];
 
-int assert(int expected, int actual, char *code) {
+char g3 = 3;
+short g4 = 4;
+int g5 = 5;
+long g6 = 6;
+int g9[3] = {0, 1, 2};
+struct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};
+struct {int a[2];} g12[2] ={{{1, 2}}};
+char g17[] = "foobar";
+char g18[10] = "foobar";
+char g19[3] = "foobar";
+char *g20 = g17+0;
+char *g21 = g17+3;
+char *g22 = &g17-3;
+char *g23[] = {g17+0, g17+3, g17-3};
+int g24=3;
+int *g25=&g24;
+int g26[3] = {1, 2, 3};
+int *g27 = g26 + 1;
+
+struct {int a[2];} g30[2] = {{1, 2}, 3, 4};
+struct {int a[2];} g31[2] = {1, 2, 3, 4};
+char g33[][4] = {'f', 'o', 'o', 0, 'b', 'a', 'r', 0};
+char *g34 = {"foo"};
+
+int assert(long expected, long actual, char *code) {
     if (expected == actual) {
-        printf("%s => %d\n", code, actual);
+        printf("%s => %ld\n", code, actual);
     } else {
-        printf("%s => %d expected but got %d\n", code, expected, actual);
+        printf("%s => %ld expected but got %ld\n", code, expected, actual);
         exit(1);
     }
 }
 
-int ret3() {
+int ret3(void) {
     return 3;
     return 5;
 }
@@ -557,6 +583,180 @@ int main() {
   assert(7, ({ int i=0; switch(1) { case 0:i=5;break; default:i=7; } i; }), "({ int i=0; switch(1) { case 0:i=5;break; default:i=7; } i; })");
   assert(2, ({ int i=0; switch(1) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }), "({ int i=0; switch(1) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; })");
   assert(0, ({ int i=0; switch(3) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }), "({ int i=0; switch(3) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; })");
+
+  assert(1, 1<<0, "1<<0");
+  assert(8, 1<<3, "1<<3");
+  assert(10, 5<<1, "5<<1");
+  assert(2, 5>>1, "5>>1");
+  assert(-1, -1>>1, "-1>>1");
+  assert(1, ({ int i=1; i<<=0; i; }), "({ int i=1; i<<=0; i; })");
+  assert(8, ({ int i=1; i<<=3; i; }), "({ int i=1; i<<=3; i; })");
+  assert(10, ({ int i=5; i<<=1; i; }), "({ int i=5; i<<=1; i; })");
+  assert(2, ({ int i=5; i>>=1; i; }), "({ int i=5; i>>=1; i; })");
+  assert(-1, -1, "-1");
+  assert(-1, ({ int i=-1; i; }), "({ int i=-1; i; })");
+  assert(-1, ({ int i=-1; i>>=1; i; }), "({ int i=-1; i>>=1; i; })");
+
+  assert(2, 0?1:2, "0?1:2");
+  assert(1, 1?1:2, "1?1:2");
+  assert(-1, 0?-2:-1, "0?-2:-1");
+  assert(-2, 1?-2:-1, "1?-2:-1");
+  assert(4, sizeof(0?1:2), "sizeof(0?1:2)");
+  assert(8, sizeof(0?(long)1:(long)2), "sizeof(0?(long)1:(long)2)");
+  assert(-1, 0?(long)-2:-1, "0?(long)-2:-1");
+  assert(-1, 0?-2:(long)-1, "0?-2:(long)-1");
+  assert(-2, 1?(long)-2:-1, "1?(long)-2:-1");
+  assert(-2, 1?-2:(long)-1, "1?-2:(long)-1");
+
+  1 ? -2 : (void)-1;
+
+  assert(10, ({ enum { ten=1+2+3+4 }; ten; }), "({ enum { ten=1+2+3+4 }; ten; })");
+  assert(1, ({ int i=0; switch(3) { case 5-2+0*3: i++; } i; }), "({ int i=0; switch(3) { case 5-2+0*3: i++; } i; })");
+  assert(8, ({ int x[1+1]; sizeof(x); }), "({ int x[1+1]; sizeof(x); })");
+  assert(6, ({ char x[8-2]; sizeof(x); }), "({ char x[8-2]; sizeof(x); })");
+  assert(6, ({ char x[2*3]; sizeof(x); }), "({ char x[2*3]; sizeof(x); })");
+  assert(3, ({ char x[12/4]; sizeof(x); }), "({ char x[12/4]; sizeof(x); })");
+  assert(0b100, ({ char x[0b110&0b101]; sizeof(x); }), "({ char x[0b110&0b101]; sizeof(x); })");
+  assert(0b111, ({ char x[0b110|0b101]; sizeof(x); }), "({ char x[0b110|0b101]; sizeof(x); })");
+  assert(0b110, ({ char x[0b111^0b001]; sizeof(x); }), "({ char x[0b111^0b001]; sizeof(x); })");
+  assert(4, ({ char x[1<<2]; sizeof(x); }), "({ char x[1<<2]; sizeof(x); })");
+  assert(2, ({ char x[4>>1]; sizeof(x); }), "({ char x[4>>1]; sizeof(x); })");
+  assert(2, ({ char x[(1==1)+1]; sizeof(x); }), "({ char x[(1==1)+1]; sizeof(x); })");
+  assert(1, ({ char x[(1!=1)+1]; sizeof(x); }), "({ char x[(1!=1)+1]; sizeof(x); })");
+  assert(1, ({ char x[(1<1)+1]; sizeof(x); }), "({ char x[(1<1)+1]; sizeof(x); })");
+  assert(2, ({ char x[(1<=1)+1]; sizeof(x); }), "({ char x[(1<=1)+1]; sizeof(x); })");
+  assert(2, ({ char x[1?2:3]; sizeof(x); }), "({ char x[1?2:3]; sizeof(x); })");
+  assert(3, ({ char x[0?2:3]; sizeof(x); }), "({ char x[0?2:3]; sizeof(x); })");
+  assert(3, ({ char x[(1,3)]; sizeof(x); }), "({ char x[(1,3)]; sizeof(x); })");
+  assert(2, ({ char x[!0+1]; sizeof(x); }), "({ char x[!0+1]; sizeof(x); })");
+  assert(1, ({ char x[!1+1]; sizeof(x); }), "({ char x[!1+1]; sizeof(x); })");
+  assert(2, ({ char x[~-3]; sizeof(x); }), "({ char x[~-3]; sizeof(x); })");
+  assert(2, ({ char x[(5||6)+1]; sizeof(x); }), "({ char x[(5||6)+1]; sizeof(x); })");
+  assert(1, ({ char x[(0||0)+1]; sizeof(x); }), "({ char x[(0||0)+1]; sizeof(x); })");
+  assert(2, ({ char x[(1&&1)+1]; sizeof(x); }), "({ char x[(1&&1)+1]; sizeof(x); })");
+  assert(1, ({ char x[(1&&0)+1]; sizeof(x); }), "({ char x[(1&&0)+1]; sizeof(x); })");
+  assert(3, ({ char x[(int)3]; sizeof(x); }), "({ char x[(int)3]; sizeof(x); })");
+  assert(15, ({ char x[(char)0xffffff0f]; sizeof(x); }), "({ char x[(char)0xffffff0f]; sizeof(x); })");
+  assert(0x10f, ({ char x[(short)0xffff010f]; sizeof(x); }), "({ char x[(short)0xffff010f]; sizeof(x); })");
+  assert(4, ({ char x[(int)0xfffffffffff+5]; sizeof(x); }), "({ char x[(int)0xfffffffffff+5]; sizeof(x); })");
+  assert(8, ({ char x[(int*)0+2]; sizeof(x); }), "({ char x[(int*)0+2]; sizeof(x); })");
+  assert(12, ({ char x[(int*)16-1]; sizeof(x); }), "({ char x[(int*)16-1]; sizeof(x); })");
+  assert(3, ({ char x[(int*)16-(int*)4]; sizeof(x); }), "({ char x[(int*)16-(int*)4]; sizeof(x); })");
+
+  assert(1, ({ int x[3]={1,2,3}; x[0]; }), "({ int x[3]={1,2,3}; x[0]; })");
+  assert(2, ({ int x[3]={1,2,3}; x[1]; }), "({ int x[3]={1,2,3}; x[1]; })");
+  assert(3, ({ int x[3]={1,2,3}; x[2]; }), "({ int x[3]={1,2,3}; x[2]; })");
+  assert(3, ({ int x[3]={1,2,3}; x[2]; }), "({ int x[3]={1,2,3}; x[2]; })");
+
+  assert(2, ({ int x[2][3]={{1,2,3},{4,5,6}}; x[0][1]; }), "({ int x[2][3]={{1,2,3},{4,5,6}}; x[0][1]; })");
+  assert(4, ({ int x[2][3]={{1,2,3},{4,5,6}}; x[1][0]; }), "({ int x[2][3]={{1,2,3},{4,5,6}}; x[1][0]; })");
+  assert(6, ({ int x[2][3]={{1,2,3},{4,5,6}}; x[1][2]; }), "({ int x[2][3]={{1,2,3},{4,5,6}}; x[1][2]; })");
+
+  assert(0, ({ int x[3]={}; x[0]; }), "({ int x[3]={}; x[0]; })");
+  assert(0, ({ int x[3]={}; x[1]; }), "({ int x[3]={}; x[1]; })");
+  assert(0, ({ int x[3]={}; x[2]; }), "({ int x[3]={}; x[2]; })");
+
+  assert(2, ({ int x[2][3]={{1,2}}; x[0][1]; }), "({ int x[2][3]={{1,2}}; x[0][1]; })");
+  assert(0, ({ int x[2][3]={{1,2}}; x[1][0]; }), "({ int x[2][3]={{1,2}}; x[1][0]; })");
+  assert(0, ({ int x[2][3]={{1,2}}; x[1][2]; }), "({ int x[2][3]={{1,2}}; x[1][2]; })");
+
+  assert('a', ({ char x[4]="abc"; x[0]; }), "({ char x[4]=\"abc\"; x[0]; })");
+  assert('c', ({ char x[4]="abc"; x[2]; }), "({ char x[4]=\"abc\"; x[2]; })");
+  assert(0, ({ char x[4]="abc"; x[3]; }), "({ char x[4]=\"abc\"; x[3]; })");
+  assert('a', ({ char x[2][4]={"abc","def"}; x[0][0]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[0][0]; })");
+  assert(0, ({ char x[2][4]={"abc","def"}; x[0][3]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[0][3]; })");
+  assert('d', ({ char x[2][4]={"abc","def"}; x[1][0]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[1][0]; })");
+  assert('f', ({ char x[2][4]={"abc","def"}; x[1][2]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[1][2]; })");
+
+
+  assert(4, ({ int x[]={1,2,3,4}; x[3]; }), "({ int x[]={1,2,3,4}; x[3]; })");
+  assert(16, ({ int x[]={1,2,3,4}; sizeof(x); }), "({ int x[]={1,2,3,4}; sizeof(x); })");
+  assert(4, ({ char x[]="foo"; sizeof(x); }), "({ char x[]=\"foo\"; sizeof(x); })");
+
+  assert(1, ({ struct {int a; int b; int c;} x={1,2,3}; x.a; }), "({ struct {int a; int b; int c;} x={1,2,3}; x.a; })");
+  assert(2, ({ struct {int a; int b; int c;} x={1,2,3}; x.b; }), "({ struct {int a; int b; int c;} x={1,2,3}; x.b; })");
+  assert(3, ({ struct {int a; int b; int c;} x={1,2,3}; x.c; }), "({ struct {int a; int b; int c;} x={1,2,3}; x.c; })");
+  assert(1, ({ struct {int a; int b; int c;} x={1}; x.a; }), "({ struct {int a; int b; int c;} x={1}; x.a; })");
+  assert(0, ({ struct {int a; int b; int c;} x={1}; x.b; }), "({ struct {int a; int b; int c;} x={1}; x.b; })");
+  assert(0, ({ struct {int a; int b; int c;} x={1}; x.c; }), "({ struct {int a; int b; int c;} x={1}; x.c; })");
+
+  assert(1, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[0].a; }), "({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[0].a; })");
+  assert(2, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[0].b; }), "({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[0].b; })");
+  assert(3, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[1].a; }), "({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[1].a; })");
+  assert(4, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[1].b; }), "({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[1].b; })");
+
+  assert(0, ({ struct {int a; int b;} x[2]={{1,2}}; x[1].b; }), "({ struct {int a; int b;} x[2]={{1,2}}; x[1].b; })");
+
+  assert(0, ({ struct {int a; int b;} x={}; x.a; }), "({ struct {int a; int b;} x={}; x.a; })");
+  assert(0, ({ struct {int a; int b;} x={}; x.b; }), "({ struct {int a; int b;} x={}; x.b; })");
+
+  assert(1, ({ typedef struct {int a,b;} T; T x={1,2}; T y=x; y.a; }), "({ typedef struct {int a,b;} T; T x={1,2}; T y=x; y.a; })");
+  assert(5, ({ typedef struct {int a,b,c,d,e,f;} T; T x={1,2,3,4,5,6}; T y; y=x; y.e; }), "({ typedef struct {int a,b,c,d,e,f;} T; T x={1,2,3,4,5,6}; T y; y=x; y.e; })");
+  assert(2, ({ typedef struct {int a,b;} T; T x={1,2}; T y, z; z=y=x; z.b; }), "({ typedef struct {int a,b;} T; T x={1,2}; T y, z; z=y=x; z.b; })");
+
+  assert(3, g3, "g3");
+  assert(4, g4, "g4");
+  assert(5, g5, "g5");
+  assert(6, g6, "g6");
+
+  assert(0, g9[0], "g9[0]");
+  assert(1, g9[1], "g9[1]");
+  assert(2, g9[2], "g9[2]");
+
+  assert(1, g11[0].a, "g11[0].a");
+  assert(2, g11[0].b, "g11[0].b");
+  assert(3, g11[1].a, "g11[1].a");
+  assert(4, g11[1].b, "g11[1].b");
+
+  assert(1, g12[0].a[0], "g12[0].a[0]");
+  assert(2, g12[0].a[1], "g12[0].a[1]");
+  assert(0, g12[1].a[0], "g12[1].a[0]");
+  assert(0, g12[1].a[1], "g12[1].a[1]");
+
+  assert(7, sizeof(g17), "sizeof(g17)");
+  assert(10, sizeof(g18), "sizeof(g18)");
+  assert(3, sizeof(g19), "sizeof(g19)");
+
+  assert(0, memcmp(g17, "foobar", 7), "memcmp(g17, \"foobar\", 7)");
+  assert(0, memcmp(g18, "foobar\0\0\0", 10), "memcmp(g18, \"foobar\\0\\0\\0\", 10)");
+  assert(0, memcmp(g19, "foo", 3), "memcmp(g19, \"foo\", 3)");
+
+  assert(0, strcmp(g20, "foobar"), "strcmp(g20, \"foobar\")");
+  assert(0, strcmp(g21, "bar"), "strcmp(g21, \"bar\")");
+  assert(0, strcmp(g22+3, "foobar"), "strcmp(g22+3, \"foobar\")");
+
+  assert(0, strcmp(g23[0], "foobar"), "strcmp(g23[0], \"foobar\")");
+  assert(0, strcmp(g23[1], "bar"), "strcmp(g23[1], \"bar\")");
+  assert(0, strcmp(g23[2]+3, "foobar"), "strcmp(g23[2]+3, \"foobar\")");
+
+  assert(3, g24, "g24");
+  assert(3, *g25, "*g25");
+  assert(2, *g27, "*g27");
+
+  assert(1, g30[0].a[0], "g30[0].a[0]");
+  assert(2, g30[0].a[1], "g30[0].a[1]");
+  assert(3, g30[1].a[0], "g30[1].a[0]");
+  assert(4, g30[1].a[1], "g30[1].a[1]");
+
+  assert(1, g31[0].a[0], "g31[0].a[0]");
+  assert(2, g31[0].a[1], "g31[0].a[1]");
+  assert(3, g31[1].a[0], "g31[1].a[0]");
+  assert(4, g31[1].a[1], "g31[1].a[1]");
+
+  assert(0, ({ int x[2][3]={0,1,2,3,4,5}; x[0][0]; }), "({ int x[2][3]={0,1,2,3,4,5}; x[0][0]; })");
+  assert(3, ({ int x[2][3]={0,1,2,3,4,5}; x[1][0]; }), "({ int x[2][3]={0,1,2,3,4,5}; x[1][0]; })");
+
+  assert(0, ({ struct {int a; int b;} x[2]={0,1,2,3}; x[0].a; }), "({ struct {int a; int b;} x[2]={0,1,2,3}; x[0].a; })");
+  assert(2, ({ struct {int a; int b;} x[2]={0,1,2,3}; x[1].a; }), "({ struct {int a; int b;} x[2]={0,1,2,3}; x[1].a; })");
+
+  assert(0, strcmp(g33[0], "foo"), "strcmp(g33[0], \"foo\")");
+  assert(0, strcmp(g33[1], "bar"), "strcmp(g33[1], \"bar\")");
+  assert(0, strcmp(g34, "foo"), "strcmp(g34, \"foo\")");
+
+
+  assert(3, ({ int a[]={1,2,3,}; a[2]; }), "({ int a[]={1,2,3,}; a[2]; })");
+  assert(1, ({ struct {int a,b,c;} x={1,2,3,}; x.a; }), "({ struct {int a,b,c;} x={1,2,3,}; x.a; })");
+  assert(2, ({ enum {x,y,z,}; z; }), "({ enum {x,y,z,}; z; })");
 
   // assert(, ({}), "({})");
 

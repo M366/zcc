@@ -1,25 +1,25 @@
 // This file contains a recursive descent parser for C.
-// See original text: https://github.com/rui314/course2020
 //
+// Most functions in this file are named after the symbols they are
+// supposed to read from an input token list. For example, stmt() is
+// responsible for reading a statement from a token list. The function
+// then construct an AST node representing a statement.
 //
+// Each function conceptually returns two values, an AST node and
+// remaining part of the input tokens. Since C doesn't support
+// multiple return values, the remaining tokens are returned to the
+// caller via a pointer argument.
 //
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
+// Input tokens are represented by a linked list. Unlike many recursive
+// descent parsers, we don't have the notion of the "input token stream".
+// Most parsing functions don't change the global state of the parser.
+// So it is very easy to lookahead arbitrary number of tokens in this
+// parser.
 
 #include "zcc.h"
 
-// Scope for local variables, or global variables, or typedefs
-// or enum constants.
+// Scope for local variables, global variables, typedefs
+// or enum constants
 typedef struct VarScope VarScope;
 struct VarScope {
     VarScope *next;
@@ -32,7 +32,7 @@ struct VarScope {
     int enum_val;
 };
 
-// Scope for struct, or union or enum tags
+// Scope for struct, union or enum tags
 typedef struct TagScope TagScope;
 struct TagScope {
     TagScope *next;
@@ -41,11 +41,43 @@ struct TagScope {
     Type *ty;
 };
 
-// Variable attributes such as typedef or extern
+// Variable attributes such as typedef or extern.
 typedef struct {
     bool is_typedef;
     bool is_static;
 } VarAttr;
+
+// This struct represents a variable initializer. Since initializers
+// can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
+// is a tree data structure.
+typedef struct Initializer Initializer;
+struct Initializer {
+    Type *ty;
+    Token *tok;
+
+    // If len is 0, it's a leaf node, and `expr` has an initializer
+    // expression. Otherwise, `children` has child nodes.
+    int len;
+    Node *expr;
+
+    // `children` may contain null pointers if elements are omitted.
+    // For example, an initializer for `int x[100] = {1}` has 99 null
+    // pointers at the end of `children`.
+    //
+    // The C spec requires that, if an initializer is given, members
+    // with no initializers will automatically be initialized with
+    // zeros. So null childrens are equivalent to zeros.
+    Initializer **children;
+};
+
+// For local variable initializer.
+typedef struct InitDesg InitDesg;
+struct InitDesg { // initializer designer
+    InitDesg *next;
+    int idx;
+    Member *member;
+    Var *var;
+};
 
 // All local variable instances created during parsing are
 // accumulated to this list.
@@ -54,7 +86,7 @@ static Var *locals;
 // Likewise, global variables are accumulated to this list.
 static Var *globals;
 
-// C has two block scopes; one is for variables/typedef and
+// C has two block scopes; one is for variables/typedefs and
 // the other is for struct/union/enum tags.
 static VarScope *var_scope;
 static TagScope *tag_scope;
@@ -76,18 +108,26 @@ static Type *enum_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
 static Node *declaration(Token **rest, Token *tok);
+static Initializer *initializer(Token **rest, Token *tok, Type *ty);
+static Node *lvar_initializer(Token **rest, Token *tok, Var *var);
+static void *gvar_initializer(Token **rest, Token *tok, Var *var);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
+static long eval(Node *node);
+static long eval2(Node *node, Var **var);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
+static long const_expr(Token **rest, Token *tok);
+static Node *conditional(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
 static Node *bitxor(Token **rest, Token *tok);
 static Node *bitand(Token **rest, Token *tok);
 static Node *equality(Token **rest, Token *tok);
 static Node *relational(Token **rest, Token *tok);
+static Node *shift(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
 static Node *new_add(Node *lhs, Node *rhs, Token *tok);
 static Node *new_sub(Node *lhs, Node *rhs, Token *tok);
@@ -178,6 +218,17 @@ static VarScope *push_scope(char *name) {
     sc->depth = scope_depth;
     var_scope = sc;
     return sc;
+}
+
+static Initializer *new_init(Type *ty, int len, Node *expr, Token *tok) {
+    Initializer *init = calloc(1, sizeof(Initializer));
+    init->ty = ty;
+    init->tok = tok;
+    init->len = len;
+    init->expr = expr;
+    if (len)
+        init->children = calloc(len, sizeof(Initializer *));
+    return init;
 }
 
 static Var *new_lvar(char *name, Type *ty) {
@@ -281,7 +332,7 @@ static Function *funcdef(Token **rest, Token *tok) {
 // That can also be written as `static long` because you can omit
 // `int` if `long` or `short` are specified. However, something like
 // `char int` is not a valid type specifier. We have to accept only a
-// limited combinations of tye typenames.
+// limited combinations of the typenames.
 //
 // In this function, we count the number of occurrences of each typename
 // while keeping the "current" type object that the typenames up
@@ -393,9 +444,14 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
     return ty;
 }
 
-// func-params = (param ("," param)*)? ")"
+// func-params = ("void" | param ("," param)*)? ")"
 // param       = typespec declarator
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
+    if (equal(tok, "void") && equal(tok->next, ")")) {
+        *rest = tok->next->next;
+        return func_type(ty);
+    }
+
     Type head = {};
     Type *cur = &head;
 
@@ -423,7 +479,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     return ty;
 }
 
-// array-dimensions = num? "]" type-suffix
+// array-dimensions = const-expr? "]" type-suffix
 static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
     if (equal(tok, "]")) {
         ty = type_suffix(rest, tok->next, ty);
@@ -432,8 +488,8 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
         return ty;
     }
 
-    int sz = get_number(tok);
-    tok = skip(tok->next, "]");
+    int sz = const_expr(&tok, tok);
+    tok = skip(tok, "]");
     ty = type_suffix(rest, tok, ty);
     return array_of(ty, sz);
 }
@@ -496,10 +552,28 @@ static Type *typename(Token **rest, Token *tok) {
     return abstract_declarator(rest, tok, ty);
 }
 
+static bool is_end(Token *tok) {
+    return equal(tok, "}") || (equal(tok, ",") && equal(tok->next, "}"));
+}
+
+static bool consume_end(Token **rest, Token *tok) {
+    if (equal(tok, "}")) {
+        *rest = tok->next;
+        return true;
+    }
+
+    if (equal(tok, ",") && equal(tok->next, "}")) {
+        *rest = tok->next->next;
+        return true;
+    }
+
+    return false;
+}
+
 // enum-specifier = ident? "{" enum-list? "}"
-//                | ident? ("{" enum-list? "}")?
+//                | ident ("{" enum-list? "}")?
 //
-// enum-list      = ident ("=" num)? ("," ident ("=" num)?)*
+// enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
 static Type *enum_specifier(Token **rest, Token *tok) {
     Type *ty = enum_type();
 
@@ -525,24 +599,20 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     // Read an enum-list.
     int i = 0;
     int val = 0;
-    while (!equal(tok, "}")) {
+    while (!consume_end(rest, tok)) {
         if (i++ > 0)
             tok = skip(tok, ",");
 
         char *name = get_ident(tok);
         tok = tok->next;
 
-        if (equal(tok, "=")) {
-            val = get_number(tok->next);
-            tok = tok->next->next;
-        }
+        if (equal(tok, "="))
+            val = const_expr(&tok, tok->next);
 
         VarScope *sc = push_scope(name);
         sc->enum_ty = ty;
         sc->enum_val = val++;
     }
-
-    *rest = tok->next;
 
     if (tag)
         push_tag_scope(tag, ty);
@@ -572,20 +642,274 @@ static Node *declaration(Token **rest, Token *tok) {
         }
 
         Var *var = new_lvar(get_ident(ty->name), ty);
-
-        if (!equal(tok, "="))
-            continue;
-        
-        Node *lhs = new_var_node(var, ty->name);
-        Node *rhs = assign(&tok, tok->next);
-        Node *node = new_binary(ND_ASSIGN, lhs, rhs, tok);
-        cur = cur->next = new_unary(ND_EXPR_STMT, node, tok);
+        if (equal(tok, "=")) {
+            Node *expr = lvar_initializer(&tok, tok->next, var);
+            cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
+        }
     }
 
     Node *node = new_node(ND_BLOCK, tok);
     node->body = head.next;
     *rest = tok->next;
     return node;
+}
+
+static Token *skip_excess_elements(Token *tok) {
+    while (!consume_end(&tok, tok)) {
+        tok = skip(tok, ",");
+        if (equal(tok, "{"))
+            tok = skip_excess_elements(tok->next);
+        else
+            assign(&tok, tok);
+    }
+    return tok;
+}
+
+static Token *skip_end(Token *tok) {
+    if (consume_end(&tok, tok))
+        return tok;
+    warn_tok(tok, "excess elements in initializer");
+    return skip_excess_elements(tok);
+}
+
+// string-initializer = string-literal
+static Initializer *string_initializer(Token **rest, Token *tok, Type *ty) {
+    // Initialize a char array with a string literal.
+    if (ty->is_incomplete) {
+        ty->size = tok->cont_len;
+        ty->array_len = tok->cont_len;
+        ty->is_incomplete = false;
+    }
+
+    Initializer *init = new_init(ty, ty->array_len, NULL, tok);
+
+    int len = (ty->array_len < tok->cont_len)
+        ? ty->array_len : tok->cont_len;
+
+    for (int i = 0; i < len; i++) {
+        Node *expr = new_num(tok->contents[i], tok);
+        init->children[i] = new_init(ty->base, 0, expr, tok);
+    }
+    *rest = tok->next;
+    return init;
+}
+
+// array-initializer = "{" initializer ("," initializer)* ","? "}"
+//                   | initializer ("," initializer)* ","
+static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
+    bool has_paren = consume(&tok, tok, "{");
+
+    if (ty->is_incomplete) {
+        int i = 0;
+        for (Token *tok2 = tok; !is_end(tok2); i++) {
+            if (i > 0)
+                tok2 = skip(tok2, ",");
+            initializer(&tok2, tok2, ty->base);
+        }
+
+        ty->size = size_of(ty->base) * i;
+        ty->array_len = i;
+        ty->is_incomplete = false;
+    }
+
+    Initializer *init = new_init(ty, ty->array_len, NULL, tok);
+
+    for (int i = 0; i < ty->array_len && !is_end(tok); i++) {
+        if (i > 0)
+            tok = skip(tok, ",");
+        init->children[i] = initializer(&tok, tok, ty->base);
+    }
+
+    if (has_paren)
+        tok = skip_end(tok);
+    *rest = tok;
+    return init;
+}
+
+// struct-initializer = "{" initializer ("," initializer)* ","? "}"
+//                   | initializer ("," initializer)* ","
+static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
+    if (!equal(tok, "{")) { // e.g. struct tag x = num;
+        Token *tok2;
+        Node *expr = assign(&tok2, tok);
+        add_type(expr);
+        if (expr->ty->kind == TY_STRUCT) {
+            Initializer *init = new_init(ty, 0, expr, tok);
+            *rest = tok2;
+            return init;
+        }
+    }
+    // e.g. struct tag x = { ... };
+    int len = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next)
+        len++;
+    
+    Initializer *init = new_init(ty, len, NULL, tok);
+    bool has_paren = consume(&tok, tok, "{");
+
+    int i = 0;
+    for (Member *mem = ty->members; mem && !is_end(tok); mem = mem->next, i++) {
+        if (i > 0)
+            tok = skip(tok, ",");
+        init->children[i] = initializer(&tok, tok, mem->ty);
+    }
+
+    if (has_paren)
+        tok = skip_end(tok);
+    *rest = tok;
+    return init;
+}
+
+// initializer = string-initializer | array-initializer | struct-initializer
+//             | "{" assign "}" | assign
+static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
+    if (ty->kind == TY_ARRAY && ty->base->kind == TY_CHAR && tok->kind == TK_STR)
+        return string_initializer(rest, tok, ty);
+    
+    if (ty->kind == TY_ARRAY)
+        return array_initializer(rest, tok, ty);
+    
+    if (ty->kind == TY_STRUCT)
+        return struct_initializer(rest, tok, ty);
+
+    Token *start = tok;
+    bool has_paren = consume(&tok, tok, "{");
+    Initializer *init = new_init(ty, 0, assign(&tok, tok), start);
+    if (has_paren)
+        tok = skip_end(tok);
+    *rest = tok;
+    return init;
+}
+// initializer = "{" initializer ("," initializer)* "}"
+Node *init_desg_expr(InitDesg *desg, Token *tok) {
+    if (desg->var)
+        return new_var_node(desg->var, tok);
+    // struct
+    if (desg->member) {
+        Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
+        node->member = desg->member;
+        return node;
+    }
+    // array
+    Node *lhs = init_desg_expr(desg->next, tok);
+    Node *rhs = new_num(desg->idx, tok);
+    return new_unary(ND_DEREF, new_add(lhs, rhs, tok), tok);    
+}
+
+static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token *tok) {
+    if (ty->kind == TY_ARRAY) {
+        Node *node = new_node(ND_NULL_EXPR, tok);
+        // int sz = size_of(ty->base); // is not used
+        for (int i = 0; i < ty->array_len; i++) {
+            InitDesg desg2 = {desg, i};
+            Initializer *child = init ? init->children[i] : NULL;
+            Node *rhs = create_lvar_init(child, ty->base, &desg2, tok);
+            node = new_binary(ND_COMMA, node, rhs, tok);
+        }
+        return node;
+    }
+
+    if (ty->kind == TY_STRUCT && (!init || init->len)) { // "!init" only check init is exist.
+        Node *node = new_node(ND_NULL_EXPR, tok);
+        int i = 0;
+        for (Member *mem = ty->members; mem; mem = mem->next, i++) {
+            InitDesg desg2 = {desg, 0, mem};
+            Initializer *child = init ? init->children[i] : NULL;
+            Node *rhs = create_lvar_init(child, mem->ty, &desg2, tok);
+            node = new_binary(ND_COMMA, node, rhs, tok);
+        }
+        return node;
+    }
+
+    Node *lhs = init_desg_expr(desg, tok); // lvar: var or array element as `*(pointer + idx)`
+    Node *rhs = init ? init->expr : new_num(0, tok);
+    return new_binary(ND_ASSIGN, lhs, rhs, tok);
+}
+
+// A variable definition with an initializer is a shorthand notation
+// for a variable definition followed by assignments. This function
+// generates assignment expressions for an initializer. For example,
+// `int x[2][2] = {{6, 7}, {8, 9}}` is converted to the following
+// expressions:
+//
+//   x[0][0] = 6;
+//   x[0][1] = 7;
+//   x[1][0] = 8;
+//   x[1][1] = 9;
+static Node *lvar_initializer(Token **rest, Token *tok, Var *var) {
+    Initializer *init = initializer(rest, tok, var->ty);
+    InitDesg desg = {NULL, 0, NULL, var}; // {InitDesg *next, int idx, Member *member, Var *var}
+    return create_lvar_init(init, var->ty, &desg, tok);
+}
+
+static void write_buf(char *buf, unsigned long val, int sz) {
+    switch (sz) {
+    case 1:
+        *(unsigned char *)buf = val;
+        return;
+    case 2:
+        *(unsigned short *)buf = val;
+        return;
+    case 4:
+        *(unsigned int *)buf = val;
+        return;
+    default:
+        assert(sz == 8);
+        *(unsigned long *)buf = val;
+        return;
+    }
+}
+
+static Relocation *
+write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int offset) {
+    if (ty->kind == TY_ARRAY) {
+        int sz = size_of(ty->base);
+        for (int i = 0; i < ty->array_len; i++) {
+            Initializer *child = init->children[i];
+            if (child)
+                cur = write_gvar_data(cur, child, ty->base, buf, offset + sz * i);
+        }
+        return cur;
+    }
+
+    if (ty->kind == TY_STRUCT) {
+        int i = 0;
+        for (Member *mem = ty->members; mem; mem = mem->next, i++) {
+            Initializer *child = init->children[i];
+            if (child)
+                cur = write_gvar_data(cur, child, mem->ty, buf, offset + mem->offset);
+        }
+        return cur;
+    }
+
+    Var *var = NULL;
+    long val  = eval2(init->expr, &var);
+
+    if (var) {
+        Relocation *rel = calloc(1, sizeof(Relocation));
+        rel->offset = offset;
+        rel->label = var->name;
+        rel->addend = val;
+        cur->next = rel;
+        return cur->next; // The *cur is only added when relocation is added.
+    }
+
+    write_buf(buf + offset, val, size_of(ty));
+    return cur;
+}
+
+// Initializers for global variables are evaluated at compile-time and
+// embedded to .data section. This function serializes Initializer
+// objects to a flat byte array. It is a compile error if an
+// initializer list contains a non-constant expression.
+static void *gvar_initializer(Token **rest, Token *tok, Var *var) {
+    Initializer *init = initializer(rest, tok, var->ty);
+
+    Relocation head = {};
+    char *buf = calloc(1, size_of(var->ty)); // All of buf are initialized to zero here, 
+    write_gvar_data(&head, init, var->ty, buf, 0);  // so initializer don't have to fill buf.
+    var->init_data = buf;
+    var->rel = head.next;
 }
 
 // Returns true if a given token represents a type.
@@ -604,7 +928,7 @@ static bool is_typename(Token *tok) {
 // stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "switch" "(" expr ")" stmt
-//      | "case" num ":" stmt
+//      | "case" const-expr ":" stmt
 //      | "default" ":" stmt
 //      | "for" "(" (expr? ";" | declaration) expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
@@ -653,10 +977,10 @@ static Node *stmt(Token **rest, Token *tok) {
     if (equal(tok, "case")) {
         if (!current_switch)
             error_tok(tok, "stray case");
-        int val = get_number(tok->next);
 
         Node *node = new_node(ND_CASE, tok);
-        tok = skip(tok->next->next, ":");
+        int val = const_expr(&tok, tok->next);
+        tok = skip(tok, ":");
         node->lhs = stmt(rest, tok);
         node->val = val;
         node->case_next = current_switch->case_next;
@@ -784,6 +1108,89 @@ static Node *expr(Token **rest, Token *tok) {
     return node;
 }
 
+static long eval(Node *node) {
+    return eval2(node, NULL);
+}
+
+// Evaluate a given node as a constant expression.
+//
+// A constant expression is either just a number or ptr+n where ptr
+// is a pointer to a global variable and n is a positive/negative
+// number. The latter form is accepted only as an initialization
+// expression for a global variable.
+static long eval2(Node *node, Var **var) {
+    add_type(node);
+
+    switch (node->kind) {
+    case ND_ADD:
+        return eval2(node->lhs, var) + eval(node->rhs);
+    case ND_SUB:
+        return eval2(node->lhs, var) - eval(node->rhs);
+    case ND_MUL:
+        return eval(node->lhs) * eval(node->rhs);
+    case ND_DIV:
+        return eval(node->lhs) / eval(node->rhs);
+    case ND_BITAND:
+        return eval(node->lhs) & eval(node->rhs);
+    case ND_BITOR:
+        return eval(node->lhs) | eval(node->rhs);
+    case ND_BITXOR:
+        return eval(node->lhs) ^ eval(node->rhs);
+    case ND_SHL:
+        return eval(node->lhs) << eval(node->rhs);
+    case ND_SHR:
+        return eval(node->lhs) >> eval(node->rhs);
+    case ND_EQ:
+        return eval(node->lhs) == eval(node->rhs);
+    case ND_NE:
+        return eval(node->lhs) != eval(node->rhs);
+    case ND_LT:
+        return eval(node->lhs) < eval(node->rhs);
+    case ND_LE:
+        return eval(node->lhs) <= eval(node->rhs);
+    case ND_COND:
+        return eval(node->cond) ? eval(node->then) : eval(node->els);
+    case ND_COMMA:
+        return eval(node->rhs);
+    case ND_NOT:
+        return !eval(node->lhs);
+    case ND_BITNOT:
+        return ~eval(node->lhs);
+    case ND_LOGAND:
+        return eval(node->lhs) && eval(node->rhs);
+    case ND_LOGOR:
+        return eval(node->lhs) || eval(node->rhs);
+    case ND_CAST:
+        if (is_integer(node->ty)) {
+            switch (size_of(node->ty)) {
+            case 1: return (char)eval(node->lhs);
+            case 2: return (short)eval(node->lhs);
+            case 4: return (int)eval(node->lhs);
+            }
+        }
+        return eval2(node->lhs, var);
+    case ND_NUM:
+        return node->val;
+    case ND_ADDR:
+        if (!var || *var || node->lhs->kind != ND_VAR)
+            error_tok(node->tok, "invalid initializer");
+        *var = node->lhs->var;
+        return 0;
+    case ND_VAR:
+        if (!var || *var || node->var->ty->kind != TY_ARRAY)
+            error_tok(node->tok, "invalid initializer");
+        *var = node->var;
+        return 0;
+    }
+
+    error_tok(node->tok, "not a constant expression");
+}
+
+static long const_expr(Token **rest, Token *tok) {
+    Node *node = conditional(rest, tok);
+    return eval(node);
+}
+
 // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
 // where tmp is a fresh pointer variable.
 static Node *to_assign(Node *binary) {
@@ -808,10 +1215,11 @@ static Node *to_assign(Node *binary) {
     return new_binary(ND_COMMA, expr1, expr2, tok);
 }
 
-// assign    = logor (assign-op assign)?
+// assign    = conditional (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
+//           | "<<=" | ">>="
 static Node *assign(Token **rest, Token *tok) {
-    Node *node = logor(&tok, tok);
+    Node *node = conditional(&tok, tok);
 
     if (equal(tok, "="))
         return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
@@ -840,11 +1248,34 @@ static Node *assign(Token **rest, Token *tok) {
     if (equal(tok, "^="))
         return to_assign(new_binary(ND_BITXOR, node, assign(rest, tok->next), tok));
 
+    if (equal(tok, "<<="))
+        return to_assign(new_binary(ND_SHL, node, assign(rest, tok->next), tok));
+
+    if (equal(tok, ">>="))
+        return to_assign(new_binary(ND_SHR, node, assign(rest, tok->next), tok));
+
     *rest = tok;
     return node;
 }
 
-// logor = logand ("||" lonand)*
+// conditional = logor ("?" expr ":" conditional)?
+static Node *conditional(Token **rest, Token *tok) {
+    Node *node = logor(&tok, tok);
+
+    if (!equal(tok, "?")) {
+        *rest = tok;
+        return node;
+    }
+
+    Node *cond = new_node(ND_COND, tok);
+    cond->cond = node;
+    cond->then = expr(&tok, tok->next);
+    tok = skip(tok, ":");
+    cond->els = conditional(rest, tok);
+    return cond;
+}
+
+// logor = logand ("||" logand)*
 static Node *logor(Token **rest, Token *tok) {
     Node *node = logand(&tok, tok);
     while (equal(tok, "||")) {
@@ -855,6 +1286,7 @@ static Node *logor(Token **rest, Token *tok) {
     return node;
 }
 
+// logand = bitor ("&&" bitor)*
 static Node *logand(Token **rest, Token *tok) {
     Node *node = bitor(&tok, tok);
     while (equal(tok, "&&")) {
@@ -920,30 +1352,52 @@ static Node *equality(Token **rest, Token *tok) {
     }
 }
 
-// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+// relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
 static Node *relational(Token **rest, Token *tok) {
-    Node *node = add(&tok, tok);
+    Node *node = shift(&tok, tok);
 
     for (;;) {
         Token *start = tok;
 
         if (equal(tok, "<")) {
-            node = new_binary(ND_LT, node, add(&tok, tok->next), start);
+            node = new_binary(ND_LT, node, shift(&tok, tok->next), start);
             continue;
         }
 
         if (equal(tok, "<=")) {
-            node = new_binary(ND_LE, node, add(&tok, tok->next), start);
+            node = new_binary(ND_LE, node, shift(&tok, tok->next), start);
             continue;
         }
 
         if (equal(tok, ">")) {
-            node = new_binary(ND_LT, add(&tok, tok->next), node, start);
+            node = new_binary(ND_LT, shift(&tok, tok->next), node, start);
             continue;
         }
 
         if (equal(tok, ">=")) {
-            node = new_binary(ND_LE, add(&tok, tok->next), node, start);
+            node = new_binary(ND_LE, shift(&tok, tok->next), node, start);
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+    }
+}
+
+// shift = add ("<<" add | ">>" add)*
+static Node *shift(Token **rest, Token *tok) {
+    Node *node = add(&tok, tok);
+
+    for (;;) {
+        Token *start = tok;
+
+        if (equal(tok, "<<")) {
+            node = new_binary(ND_SHL, node, add(&tok, tok->next), start);
+            continue;
+        }
+
+        if (equal(tok, ">>")) {
+            node = new_binary(ND_SHR, node, add(&tok, tok->next), start);
             continue;
         }
 
@@ -1026,7 +1480,7 @@ static Node *add(Token **rest, Token *tok) {
     }
 }
 
-// mul = cast ("*" cast | "/" cast | "%=" cast)*
+// mul = cast ("*" cast | "/" cast | "%" cast)*
 static Node *mul(Token **rest, Token *tok) {
     Node *node = cast(&tok, tok);
 
@@ -1133,7 +1587,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
         tok = tok->next;
     }
 
-    if (tag && !equal(tok, "{")) { // etc. struct tag ident;
+    if (tag && !equal(tok, "{")) { // e.g. struct tag ident;
         *rest = tok;
 
         TagScope *sc = find_tag(tag);
@@ -1148,7 +1602,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 
     tok = skip(tok, "{");
 
-    // Construct a struct object. etc. struct tag { ... }
+    // Construct a struct object. e.g. struct tag { ... }
     Type *ty = struct_type();
     ty->members = struct_members(rest, tok);
 
@@ -1394,7 +1848,7 @@ static Node *primary(Token **rest, Token *tok) {
         
         // Variable or enum constant
         VarScope *sc = find_var(tok);
-        if (!sc || (!sc->var && !sc->enum_ty)) // no scope or (no var and no enum) => error
+        if (!sc || (!sc->var && !sc->enum_ty))
             error_tok(tok, "undefined variable");
 
         Node *node;
@@ -1455,7 +1909,9 @@ Program *parse(Token *tok) {
 
         // Global variable
         for (;;) {
-            new_gvar(get_ident(ty->name), ty, true);
+            Var *var = new_gvar(get_ident(ty->name), ty, true);
+            if (equal(tok, "="))
+                gvar_initializer(&tok, tok->next, var);
             if (consume(&tok, tok, ";"))
                 break;
             tok = skip(tok, ",");

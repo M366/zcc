@@ -11,7 +11,7 @@
 
 typedef struct Type Type;
 typedef struct Member Member;
-
+typedef struct Relocation Relocation;
 //
 // tokenize.c
 //
@@ -65,6 +65,18 @@ struct Var {
 
     // Global variable
     char *init_data;
+    Relocation *rel;
+};
+
+// Global variable can be initialized either by a constant expression
+// or a pointer to another global vaiable. This struct represents the
+// latter.
+typedef struct Relocation Relocation;
+struct Relocation {
+    Relocation *next;
+    int offset;
+    char *label;
+    long addend;
 };
 
 // AST node
@@ -77,13 +89,16 @@ typedef enum {
     ND_BITAND,    // &
     ND_BITOR,     // |
     ND_BITXOR,    // ^
+    ND_SHL,       // << bitwise shift left
+    ND_SHR,       // >> bitwise shift right
     ND_EQ,        // ==
     ND_NE,        // !=
     ND_LT,        // < less than
-    ND_LE,        // <=
+    ND_LE,        // <= less than equal
     ND_ASSIGN,    // =
+    ND_COND,      // ?: conditional operator
     ND_COMMA,     // ,
-    ND_MEMBER,    // . (struct member access);
+    ND_MEMBER,    // . (struct member access)
     ND_ADDR,      // unary &
     ND_DEREF,     // unary *
     ND_NOT,       // !

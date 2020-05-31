@@ -192,6 +192,19 @@ static void gen_expr(Node *node) {
         gen_expr(node->lhs);
         cast(node->lhs->ty, node->ty);
         return;
+    case ND_COND: {
+        int seq = labelseq++;
+        gen_expr(node->cond);
+        printf("  cmp %s, 0\n", reg(--top));
+        printf("  je .L.else.%d\n", seq);
+        gen_expr(node->then);
+        top--;
+        printf("  jmp .L.end.%d\n", seq);
+        printf(".L.else.%d:\n", seq);
+        gen_expr(node->els);
+        printf(".L.end.%d:\n", seq);
+        return;
+    }
     case ND_NOT:
         gen_expr(node->lhs);
         printf("  cmp %s, 0\n", reg(top - 1));
@@ -314,6 +327,14 @@ static void gen_expr(Node *node) {
         printf("  setle al\n");
         printf("  movzx %s, al\n", rd);
         return;
+    case ND_SHL:
+        printf("  mov rcx, %s\n", reg(top));
+        printf("  shl %s, cl\n", rd);
+        return;
+    case ND_SHR:
+        printf("  mov rcx, %s\n", reg(top));
+        printf("  sar %s, cl\n", rd);
+        return;
     default:
         error_tok(node->tok, "invalid expression");
     }
@@ -378,7 +399,7 @@ static void gen_stmt(Node *node) {
 
         for (Node *n = node->case_next; n; n = n->case_next) {
             n->case_label = labelseq++;
-            n->case_end_label = seq;
+            // n->case_end_label = seq; // is not used
             printf("  cmp %s, %ld\n", reg(top - 1), n->val);
             printf("  je .L.case.%d\n", n->case_label);
         }
@@ -386,7 +407,7 @@ static void gen_stmt(Node *node) {
 
         if (node->default_case) {
             int i = labelseq++;
-            node->default_case->case_end_label = seq;
+            // node->default_case->case_end_label = seq; // is not used.
             node->default_case->case_label = i;
             printf("  jmp .L.case.%d\n", i);
         }
@@ -437,19 +458,40 @@ static void gen_stmt(Node *node) {
     }
 }
 
+static void emit_bss(Program *prog) {
+    printf(".bss\n");
+
+    for (Var *var = prog->globals; var; var = var->next) {
+        if (var->init_data)
+            continue;
+        
+        printf(".align %d\n", var->ty->align);
+        printf("%s:\n", var->name);
+        printf("  .zero %d\n", size_of(var->ty));
+    }
+}
+
 static void emit_data(Program *prog) {
     printf(".data\n");
 
     for (Var *var = prog->globals; var; var = var->next) {
+        if (!var->init_data)
+            continue;
+            
+        printf(".align %d\n", var->ty->align);
         printf("%s:\n", var->name);
 
-        if (!var->init_data) {
-            printf("  .zero %d\n", size_of(var->ty));
-            continue;
+        Relocation *rel = var->rel;
+        int pos = 0;
+        while (pos < size_of(var->ty)) {
+            if (rel && rel->offset == pos) {
+                printf("  .quad %s%+ld\n", rel->label, rel->addend);
+                rel = rel->next;
+                pos += 8;
+            } else {
+                printf("  .byte %d\n", var->init_data[pos++]);
+            }
         }
-
-        for (int i = 0; i < size_of(var->ty); i++)
-            printf("  .byte %d\n", var->init_data[i]);
     }
 }
 
@@ -512,6 +554,7 @@ static void emit_text(Program *prog) {
 
 void codegen(Program *prog) {
     printf(".intel_syntax noprefix\n");
+    emit_bss(prog);
     emit_data(prog);
     emit_text(prog);
 }
