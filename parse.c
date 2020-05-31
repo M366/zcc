@@ -740,7 +740,7 @@ static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
 }
 
 // initializer = string-initializer | array-initializer | struct-initializer
-//             | assign
+//             | "{" assign "}" | assign
 static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
     if (ty->kind == TY_ARRAY && ty->base->kind == TY_CHAR && tok->kind == TK_STR)
         return string_initializer(rest, tok, ty);
@@ -750,8 +750,14 @@ static Initializer *initializer(Token **rest, Token *tok, Type *ty) {
     
     if (ty->kind == TY_STRUCT)
         return struct_initializer(rest, tok, ty);
-    
-    return new_init(ty, 0, assign(rest, tok), tok);
+
+    Token *start = tok;
+    bool has_paren = consume(&tok, tok, "{");
+    Initializer *init = new_init(ty, 0, assign(&tok, tok), start);
+    if (has_paren)
+        tok = skip_end(tok);
+    *rest = tok;
+    return init;
 }
 // initializer = "{" initializer ("," initializer)* "}"
 Node *init_desg_expr(InitDesg *desg, Token *tok) {
