@@ -12,6 +12,7 @@
 typedef struct Type Type;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
+
 //
 // tokenize.c
 //
@@ -59,6 +60,7 @@ struct Var {
     char *name;    // Variable name
     Type *ty;      // Type
     bool is_local; // local or global
+    int align;     // alignment
 
     // Local variable
     int offset;
@@ -245,6 +247,7 @@ struct Member {
     Type *ty;
     Token *tok; // for error message
     Token *name;
+    int align;
     int offset;
 };
 
