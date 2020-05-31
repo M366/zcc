@@ -425,7 +425,7 @@ static void gen_stmt(Node *node) {
         return;
     case ND_BLOCK:
         for (Node *n = node->body; n; n = n->next)
-            gen_stmt(n);
+            gen_stmt(n); // If node is "empty statement", node->body is NULL, so for-then do nothing.
         return;
     case ND_BREAK:
         if (brkseq == 0)

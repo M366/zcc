@@ -771,7 +771,7 @@ int main() {
   ext2 = &ext1;
   assert(5, *ext2, "*ext2");
 
-  // assert(, ({}), "({})");
+  ;
 
   printf("OK\n");
   return 0;
