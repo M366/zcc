@@ -547,10 +547,28 @@ static Type *typename(Token **rest, Token *tok) {
     return abstract_declarator(rest, tok, ty);
 }
 
+static bool is_end(Token *tok) {
+    return equal(tok, "}") || (equal(tok, ",") && equal(tok->next, "}"));
+}
+
+static bool consume_end(Token **rest, Token *tok) {
+    if (equal(tok, "}")) {
+        *rest = tok->next;
+        return true;
+    }
+
+    if (equal(tok, ",") && equal(tok->next, "}")) {
+        *rest = tok->next->next;
+        return true;
+    }
+
+    return false;
+}
+
 // enum-specifier = ident? "{" enum-list? "}"
 //                | ident ("{" enum-list? "}")?
 //
-// enum-list      = ident ("=" num)? ("," ident ("=" num)?)*
+// enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
 static Type *enum_specifier(Token **rest, Token *tok) {
     Type *ty = enum_type();
 
@@ -576,7 +594,7 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     // Read an enum-list.
     int i = 0;
     int val = 0;
-    while (!equal(tok, "}")) {
+    while (!consume_end(rest, tok)) {
         if (i++ > 0)
             tok = skip(tok, ",");
 
@@ -590,8 +608,6 @@ static Type *enum_specifier(Token **rest, Token *tok) {
         sc->enum_ty = ty;
         sc->enum_val = val++;
     }
-
-    *rest = tok->next;
 
     if (tag)
         push_tag_scope(tag, ty);
@@ -634,7 +650,7 @@ static Node *declaration(Token **rest, Token *tok) {
 }
 
 static Token *skip_excess_elements(Token *tok) {
-    while (!equal(tok, "}")) {
+    while (!consume_end(&tok, tok)) {
         tok = skip(tok, ",");
         if (equal(tok, "{"))
             tok = skip_excess_elements(tok->next);
@@ -645,8 +661,8 @@ static Token *skip_excess_elements(Token *tok) {
 }
 
 static Token *skip_end(Token *tok) {
-    if (equal(tok, "}"))
-        return tok->next;
+    if (consume_end(&tok, tok))
+        return tok;
     warn_tok(tok, "excess elements in initializer");
     return skip_excess_elements(tok);
 }
@@ -673,14 +689,14 @@ static Initializer *string_initializer(Token **rest, Token *tok, Type *ty) {
     return init;
 }
 
-// array-initializer = "{" initializer ("," initializer)* "}"
+// array-initializer = "{" initializer ("," initializer)* ","? "}"
 //                   | initializer ("," initializer)* ","
 static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
     bool has_paren = consume(&tok, tok, "{");
 
     if (ty->is_incomplete) {
         int i = 0;
-        for (Token *tok2 = tok; !equal(tok2, "}"); i++) {
+        for (Token *tok2 = tok; !is_end(tok2); i++) {
             if (i > 0)
                 tok2 = skip(tok2, ",");
             initializer(&tok2, tok2, ty->base);
@@ -693,7 +709,7 @@ static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
 
     Initializer *init = new_init(ty, ty->array_len, NULL, tok);
 
-    for (int i = 0; i < ty->array_len && !equal(tok, "}"); i++) {
+    for (int i = 0; i < ty->array_len && !is_end(tok); i++) {
         if (i > 0)
             tok = skip(tok, ",");
         init->children[i] = initializer(&tok, tok, ty->base);
@@ -705,7 +721,7 @@ static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
     return init;
 }
 
-// struct-initializer = "{" initializer ("," initializer)* "}"
+// struct-initializer = "{" initializer ("," initializer)* ","? "}"
 //                   | initializer ("," initializer)* ","
 static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
     if (!equal(tok, "{")) { // e.g. struct tag x = num;
@@ -727,7 +743,7 @@ static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
     bool has_paren = consume(&tok, tok, "{");
 
     int i = 0;
-    for (Member *mem = ty->members; mem && !equal(tok, "}"); mem = mem->next, i++) {
+    for (Member *mem = ty->members; mem && !is_end(tok); mem = mem->next, i++) {
         if (i > 0)
             tok = skip(tok, ",");
         init->children[i] = initializer(&tok, tok, mem->ty);
