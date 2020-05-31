@@ -1888,6 +1888,8 @@ Program *parse(Token *tok) {
         Token *start = tok;
         VarAttr attr = {};
         Type *basety = typespec(&tok, tok, &attr);
+        if (consume(&tok, tok, ";"))
+            continue;
         Type *ty = declarator(&tok, tok, basety);
 
         // Typedef
