@@ -661,6 +661,16 @@ static Node *declaration(Token **rest, Token *tok) {
             continue;
         }
 
+        if (attr.is_static) {
+            // static local variable
+            Var *var = new_gvar(new_gvar_name(), ty, true);
+            push_scope(get_ident(ty->name))->var = var;
+
+            if (equal(tok, "="))
+                gvar_initializer(&tok, tok->next, var);
+                continue;
+        }
+
         Var *var = new_lvar(get_ident(ty->name), ty);
         if (attr.align)
             var->align = attr.align;
@@ -1097,7 +1107,7 @@ static Node *stmt(Token **rest, Token *tok) {
     return node;
 }
 
-// compound-stmt = (declaration | stmt)* "}"
+// compound-stmt = (declaration | stmt)* "}"      // compound-stmt is known as "block"
 static Node *compound_stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_BLOCK, tok);
     Node head = {};
@@ -1202,7 +1212,7 @@ static long eval2(Node *node, Var **var) {
     case ND_NUM:
         return node->val;
     case ND_ADDR:
-        if (!var || *var || node->lhs->kind != ND_VAR)
+        if (!var || *var || node->lhs->kind != ND_VAR || node->lhs->var->is_local)
             error_tok(node->tok, "invalid initializer");
         *var = node->lhs->var;
         return 0;
@@ -1957,7 +1967,7 @@ Program *parse(Token *tok) {
 
             if (equal(tok, "="))
                 gvar_initializer(&tok, tok->next, var);
-                
+
             if (consume(&tok, tok, ";"))
                 break;
             tok = skip(tok, ",");
