@@ -10,12 +10,17 @@ $(OBJS): zcc.h
 /tmp/tmpfs:
 	mkdir -p /tmp/tmpfs
 
-test: zcc /tmp/tmpfs
+zcc-stage2: zcc $(SRCS) zcc.h self.sh
+	./self.sh
+
+test: zcc tests/extern.o /tmp/tmpfs
 	./zcc tests/tests.c > /tmp/tmpfs/tmp.s
-	echo 'int ext1; int *ext2; int ext3 = 5; int char_fn() { return 257; }' \
-		  'int static_fn() { return 5; }' | \
-	      gcc -xc -c -fno-common -o tmp2.o -
-	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s tmp2.o
+	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s tests/extern.o
+	/tmp/tmpfs/tmp
+
+test-stage2: zcc-stage2 tests/extern.o
+	./zcc-stage2 tests/tests.c > /tmp/tmpfs/tmp.s
+	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s tests/extern.o
 	/tmp/tmpfs/tmp
 
 queen: zcc /tmp/tmpfs
@@ -24,7 +29,7 @@ queen: zcc /tmp/tmpfs
 	/tmp/tmpfs/tmp
 
 clean:
-	rm -rf zcc *.o *~ tmp* tests/*~ tests/*.o
+	rm -rf zcc zcc-stage* *.o *~ tmp* tests/*~ tests/*.o
 	rm -rf /tmp/tmpfs/*
 
 .PHONY: test clean
