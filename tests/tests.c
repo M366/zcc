@@ -56,6 +56,7 @@ Tree *tree = &(Tree){
 
 extern int ext1;
 extern int *ext2;
+static int ext3 = 3;
 
 int;
 struct {char a; int b;};
@@ -837,6 +838,8 @@ int main() {
   assert(4, tree->lhs->rhs->val, "tree->lhs->rhs->val");
 
   ret_none();
+
+  assert(3, ext3, "ext3");
 
   printf("OK\n");
   return 0;

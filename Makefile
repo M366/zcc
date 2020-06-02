@@ -12,9 +12,9 @@ $(OBJS): zcc.h
 
 test: zcc /tmp/tmpfs
 	./zcc tests/tests.c > /tmp/tmpfs/tmp.s
-	echo 'int ext1; int *ext2; int char_fn() { return 257; }' \ 
+	echo 'int ext1; int *ext2; int ext3 = 5; int char_fn() { return 257; }' \
 		  'int static_fn() { return 5; }' | \
-	      gcc -xc -c -o tmp2.o -
+	      gcc -xc -c -fno-common -o tmp2.o -
 	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s tmp2.o
 	/tmp/tmpfs/tmp
 

@@ -113,7 +113,7 @@ static Type *declarator(Token **rest, Token *tok, Type *ty);
 static Node *declaration(Token **rest, Token *tok);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Var *var);
-static void *gvar_initializer(Token **rest, Token *tok, Var *var);
+static void gvar_initializer(Token **rest, Token *tok, Var *var);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
@@ -246,12 +246,13 @@ static Var *new_lvar(char *name, Type *ty) {
     return var;
 }
 
-static Var *new_gvar(char *name, Type *ty, bool emit) {
+static Var *new_gvar(char *name, Type *ty, bool is_static, bool emit) {
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
     var->ty = ty;
     var->align = ty->align;
     var->is_local = false;
+    var->is_static = is_static;
     if (emit) {
         var->next = globals;
         globals = var;
@@ -269,7 +270,7 @@ static char *new_gvar_name(void) {
 
 static Var *new_string_literal(char *p, int len) {
     Type *ty = array_of(ty_char, len);
-    Var *var = new_gvar(new_gvar_name(), ty, true);
+    Var *var = new_gvar(new_gvar_name(), ty, true, true);
     var->init_data = p;
     return var;
 }
@@ -663,7 +664,7 @@ static Node *declaration(Token **rest, Token *tok) {
 
         if (attr.is_static) {
             // static local variable
-            Var *var = new_gvar(new_gvar_name(), ty, true);
+            Var *var = new_gvar(new_gvar_name(), ty, true, true);
             push_scope(get_ident(ty->name))->var = var;
 
             if (equal(tok, "="))
@@ -760,7 +761,7 @@ static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
 }
 
 // struct-initializer = "{" initializer ("," initializer)* ","? "}"
-//                   | initializer ("," initializer)* ","
+//                    | initializer ("," initializer)* ","
 static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
     if (!equal(tok, "{")) { // e.g. struct tag x = num;
         Token *tok2;
@@ -916,7 +917,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     }
 
     Var *var = NULL;
-    long val  = eval2(init->expr, &var);
+    long val = eval2(init->expr, &var);
 
     if (var) {
         Relocation *rel = calloc(1, sizeof(Relocation));
@@ -935,7 +936,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 // embedded to .data section. This function serializes Initializer
 // objects to a flat byte array. It is a compile error if an
 // initializer list contains a non-constant expression.
-static void *gvar_initializer(Token **rest, Token *tok, Var *var) {
+static void gvar_initializer(Token **rest, Token *tok, Var *var) {
     Initializer *init = initializer(rest, tok, var->ty);
 
     Relocation head = {};
@@ -1553,7 +1554,7 @@ static Node *mul(Token **rest, Token *tok) {
 // compound-literal = initializer "}"  // compound-literal is unnamed object of array or struct.
 static Node *compound_literal(Token **rest, Token *tok, Type *ty, Token *start) {
     if (scope_depth == 0) {
-        Var *var = new_gvar(new_gvar_name(), ty, true);
+        Var *var = new_gvar(new_gvar_name(), ty, true, true);
         gvar_initializer(rest, tok, var);
         return new_var_node(var, start);
     }
@@ -1977,7 +1978,7 @@ Program *parse(Token *tok) {
 
         // Function
         if (ty->kind == TY_FUNC) {
-            current_fn = new_gvar(get_ident(ty->name), ty, false);
+            current_fn = new_gvar(get_ident(ty->name), ty, attr.is_static, false);
             if (!consume(&tok, tok, ";"))
                 cur = cur->next = funcdef(&tok, start);
             continue;
@@ -1985,7 +1986,7 @@ Program *parse(Token *tok) {
 
         // Global variable
         for (;;) {
-            Var *var = new_gvar(get_ident(ty->name), ty, true);
+            Var *var = new_gvar(get_ident(ty->name), ty, attr.is_static, !attr.is_extern);
             if (attr.align)
                 var->align = attr.align;
 

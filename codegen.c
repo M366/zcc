@@ -119,7 +119,7 @@ static void cast(Type *from, Type *to) {
     if (to->kind == TY_BOOL) {
         printf("  cmp %s, 0\n", r);
         printf("  setne %sb\n", r);
-        printf("  movsx %s, %sb\n", r, r);
+        printf("  movzx %s, %sb\n", r, r);
         return;
     }
 
@@ -196,7 +196,7 @@ static void gen_expr(Node *node) {
         int seq = labelseq++;
         gen_expr(node->cond);
         printf("  cmp %s, 0\n", reg(--top));
-        printf("  je .L.else.%d\n", seq);
+        printf("  je  .L.else.%d\n", seq);
         gen_expr(node->then);
         top--;
         printf("  jmp .L.end.%d\n", seq);
@@ -468,6 +468,8 @@ static void emit_bss(Program *prog) {
             continue;
         
         printf(".align %d\n", var->align);
+        if (!var->is_static)
+            printf(".globl %s\n", var->name);
         printf("%s:\n", var->name);
         printf("  .zero %d\n", size_of(var->ty));
     }
@@ -481,6 +483,8 @@ static void emit_data(Program *prog) {
             continue;
             
         printf(".align %d\n", var->align);
+        if (!var->is_static)
+            printf(".globl %s\n", var->name);
         printf("%s:\n", var->name);
 
         Relocation *rel = var->rel;
