@@ -10,7 +10,10 @@ int main(int argc, char **argv) {
 
     // Assign offsets to local variables. The last declared lvar become the first lvar in the stack.
     for (Function *fn = prog->fns; fn; fn = fn->next) {
-        int offset = 32; // 32 for callee-saved registers
+        // Besides local variables, callee-saved registers taken 32 bytes
+        // and the variable-argument save area takes 48 bytes in the stack.
+        int offset = fn->is_variadic ? 80 : 32;
+
         for (Var *var = fn->locals; var; var = var->next) {
             offset = align_to(offset, var->align);
             offset += size_of(var->ty);
