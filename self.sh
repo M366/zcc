@@ -30,15 +30,22 @@ int fclose(FILE *fp);
 int feof(FILE *stream);
 static void assert() {}
 int strcmp(char *s1, char *s2);
+int strncasecmp(char *s1, char *s2);
 int printf(char *fmt, ...);
 int sprintf(char *buf, char *fmt, ...);
+int fprintf(FILE *fp, char *fmt, ...);
+int vfprintf(FILE *fp, char *fmt, va_list ap);
 long strlen(char *p);
 int strncmp(char *p, char *q);
 void *memcpy(char *dst, char *src, long n);
 char *strndup(char *p, long n);
 int isspace(int c);
+int ispunct(int c);
+int isdigit(int c);
 char *strstr(char *haystack, char *needle);
 static void va_end(va_list ap) {}
+long strtoul(char *nptr, char **endptr, int base);
+void exit(int code);
 EOF
 
     grep -v '^#' zcc.h >> $TMP/$1
@@ -62,6 +69,6 @@ zcc main.c
 zcc type.c
 cc parse.c # need "unsigned" keyword
 zcc codegen.c
-cc tokenize.c
+zcc tokenize.c
 
 gcc -static -o zcc-stage2 $TMP/*.o
