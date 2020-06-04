@@ -12,7 +12,10 @@ $(TMPFS):
 	mkdir -p $(TMPFS)
 
 zcc-stage2: zcc $(SRCS) zcc.h self.sh
-	./self.sh
+	./self.sh tmp-stage2 ./zcc zcc-stage2
+
+zcc-stage3: zcc-stage2
+	./self.sh tmp-stage3 ./zcc-stage2 zcc-stage3
 
 test: zcc tests/extern.o $(TMPFS)
 	./zcc tests/tests.c > $(TMPFS)/tmp.s
@@ -23,6 +26,11 @@ test-stage2: zcc-stage2 tests/extern.o
 	./zcc-stage2 tests/tests.c > $(TMPFS)/tmp.s
 	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s tests/extern.o
 	$(TMPFS)/tmp
+
+test-stage3: zcc-stage3
+	diff zcc-stage2 zcc-stage3
+
+test-all: test test-stage2 test-stage3
 
 queen: zcc $(TMPFS)
 	./zcc tests/nqueen.c > $(TMPFS)/tmp.s

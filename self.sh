@@ -1,8 +1,11 @@
-#!/bin/bash -x
+#!/bin/bash
 set -e
 
-TMP=tmp-self
+TMP=$1
+CC=$2
+OUTPUT=$3
 
+rm -rf $TMP
 mkdir -p $TMP
 
 zcc() {
@@ -58,7 +61,7 @@ EOF
     sed -i 's/\bva_start\b/__builtin_va_start/g' $TMP/$1
     sed -i 's/\bunsigned\b//g' $TMP/$1
 
-    ./zcc $TMP/$1 > $TMP/${1%.c}.s
+    (cd $TMP; ../$CC $1 > ${1%.c}.s)
     gcc -c -o $TMP/${1%.c}.o $TMP/${1%.c}.s
 }
 
@@ -72,4 +75,4 @@ zcc parse.c # need "unsigned" keyword
 zcc codegen.c
 zcc tokenize.c
 
-gcc -static -o zcc-stage2 $TMP/*.o
+(cd $TMP; gcc -static -o ../$OUTPUT *.o)
