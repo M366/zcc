@@ -4,4 +4,5 @@
 **/a.out
 tmp*
 zcc
+zcc-stage*
 .DS_Store

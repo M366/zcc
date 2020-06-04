@@ -1,30 +1,45 @@
 CFLAGS=-std=c11 -g -static -fno-common
 SRCS=$(wildcard *.c)
 OBJS=$(SRCS:.c=.o)
+TMPFS=/tmp/tmpfs
 
 zcc: $(OBJS)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
 $(OBJS): zcc.h
 
-/tmp/tmpfs:
-	mkdir -p /tmp/tmpfs
+$(TMPFS):
+	mkdir -p $(TMPFS)
 
-test: zcc /tmp/tmpfs
-	./zcc tests/tests.c > /tmp/tmpfs/tmp.s
-	echo 'int char_fn() { return 257; } int static_fn() { return 5; }' | \
-	      gcc -xc -c -o tmp2.o -
-	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s tmp2.o
-	/tmp/tmpfs/tmp
+zcc-stage2: zcc $(SRCS) zcc.h self.sh
+	./self.sh tmp-stage2 ./zcc zcc-stage2
 
-queen: zcc /tmp/tmpfs
-	./zcc tests/nqueen.c > /tmp/tmpfs/tmp.s
-	gcc -static -o /tmp/tmpfs/tmp /tmp/tmpfs/tmp.s
-	/tmp/tmpfs/tmp
+zcc-stage3: zcc-stage2
+	./self.sh tmp-stage3 ./zcc-stage2 zcc-stage3
+
+test: zcc tests/extern.o $(TMPFS)
+	./zcc tests/tests.c > $(TMPFS)/tmp.s
+	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s tests/extern.o
+	$(TMPFS)/tmp
+
+test-stage2: zcc-stage2 tests/extern.o
+	./zcc-stage2 tests/tests.c > $(TMPFS)/tmp.s
+	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s tests/extern.o
+	$(TMPFS)/tmp
+
+test-stage3: zcc-stage3
+	diff zcc-stage2 zcc-stage3
+
+test-all: test test-stage2 test-stage3
+
+queen: zcc $(TMPFS)
+	./zcc tests/nqueen.c > $(TMPFS)/tmp.s
+	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s
+	$(TMPFS)/tmp
 
 clean:
-	rm -rf zcc *.o *~ tmp* tests/*~ tests/*.o
-	rm -rf /tmp/tmpfs/*
+	rm -rf zcc zcc-stage* *.o *~ tmp* tests/*~ tests/*.o
+	rm -rf $(TMPFS)/*
 
 .PHONY: test clean
 

@@ -130,7 +130,7 @@ static bool is_keyword(Token *tok) {
         "return", "if", "else", "for", "while", "int", "sizeof", "char",
         "struct", "union", "short", "long", "void", "typedef", "_Bool",
         "enum", "static", "break", "continue", "goto", "switch", "case",
-        "default",
+        "default", "extern", "alignof", "_Alignas", "do",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -340,7 +340,8 @@ static Token *tokenize(char *filename, char *p) {
         }
 
         // Three-letter punctuators
-        if (startswith(p, "<<=") || startswith(p, ">>=")) {
+        if (startswith(p, "<<=") || startswith(p, ">>=") ||
+            startswith(p, "...")) {
             cur = new_token(TK_RESERVED, cur, p, 3);
             p += 3;
             continue;

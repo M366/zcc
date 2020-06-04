@@ -45,6 +45,8 @@ struct TagScope {
 typedef struct {
     bool is_typedef;
     bool is_static;
+    bool is_extern;
+    int align;
 } VarAttr;
 
 // This struct represents a variable initializer. Since initializers
@@ -104,13 +106,14 @@ static Node *current_switch;
 
 static bool is_typename(Token *tok);
 static Type *typespec(Token **rest, Token *tok, VarAttr *attr);
+static Type *typename(Token **rest, Token *tok);
 static Type *enum_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
 static Node *declaration(Token **rest, Token *tok);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Var *var);
-static void *gvar_initializer(Token **rest, Token *tok, Var *var);
+static void gvar_initializer(Token **rest, Token *tok, Var *var);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
@@ -235,6 +238,7 @@ static Var *new_lvar(char *name, Type *ty) {
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
     var->ty = ty;
+    var->align = ty->align;
     var->is_local = true;
     var->next = locals;
     locals = var;
@@ -242,11 +246,13 @@ static Var *new_lvar(char *name, Type *ty) {
     return var;
 }
 
-static Var *new_gvar(char *name, Type *ty, bool emit) {
+static Var *new_gvar(char *name, Type *ty, bool is_static, bool emit) {
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
     var->ty = ty;
+    var->align = ty->align;
     var->is_local = false;
+    var->is_static = is_static;
     if (emit) {
         var->next = globals;
         globals = var;
@@ -264,7 +270,7 @@ static char *new_gvar_name(void) {
 
 static Var *new_string_literal(char *p, int len) {
     Type *ty = array_of(ty_char, len);
-    Var *var = new_gvar(new_gvar_name(), ty, true);
+    Var *var = new_gvar(new_gvar_name(), ty, true, true);
     var->init_data = p;
     return var;
 }
@@ -310,6 +316,7 @@ static Function *funcdef(Token **rest, Token *tok) {
     Function *fn = calloc(1, sizeof(Function));
     fn->name = get_ident(ty->name);
     fn->is_static = attr.is_static;
+    fn->is_variadic = ty->is_variadic;
 
     enter_scope();
     for (Type *t = ty->params; t; t = t->next)
@@ -358,18 +365,33 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
 
     while (is_typename(tok)) {
         // Handle storage class specifiers.
-        if (equal(tok, "typedef") || equal(tok, "static")) {
+        if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern")) {
             if (!attr)
                 error_tok(tok, "storage class specifier is not allowed in this context");
             
             if (equal(tok, "typedef"))
                 attr->is_typedef = true;
-            else
+            else if (equal(tok, "static"))
                 attr->is_static = true;
+            else
+                attr->is_extern = true;
 
-            if (attr->is_typedef + attr->is_static > 1)
-                error_tok(tok, "typedef and static may not be used together");
+            if (attr->is_typedef + attr->is_static + attr->is_extern > 1)
+                error_tok(tok, "typedef and static and extern may not be used together");
             tok = tok->next;
+            continue;
+        }
+
+        if (equal(tok, "_Alignas")) {
+            if (!attr)
+                error_tok(tok, "_Alignas is not allowed in this context");
+            tok = skip(tok->next, "(");
+
+            if (is_typename(tok))
+                attr->align = typename(&tok, tok)->align;
+            else
+                attr->align = const_expr(&tok, tok);
+            tok = skip(tok, ")");
             continue;
         }
 
@@ -444,7 +466,7 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
     return ty;
 }
 
-// func-params = ("void" | param ("," param)*)? ")"
+// func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = typespec declarator
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
     if (equal(tok, "void") && equal(tok->next, ")")) {
@@ -454,10 +476,18 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
     Type head = {};
     Type *cur = &head;
+    bool is_variadic = false;
 
     while (!equal(tok, ")")) {
         if (cur != &head)
             tok = skip(tok, ",");
+
+        if (equal(tok, "...")) {
+            is_variadic = true;
+            tok = tok->next;
+            skip(tok, ")");
+            break;
+        }
 
         Type *ty2 = typespec(&tok, tok, NULL);
         ty2 = declarator(&tok, tok, ty2);
@@ -475,6 +505,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
     ty = func_type(ty);
     ty->params = head.next;
+    ty->is_variadic = is_variadic;
     *rest = tok->next;
     return ty;
 }
@@ -641,7 +672,20 @@ static Node *declaration(Token **rest, Token *tok) {
             continue;
         }
 
+        if (attr.is_static) {
+            // static local variable
+            Var *var = new_gvar(new_gvar_name(), ty, true, true);
+            push_scope(get_ident(ty->name))->var = var;
+
+            if (equal(tok, "="))
+                gvar_initializer(&tok, tok->next, var);
+                continue;
+        }
+
         Var *var = new_lvar(get_ident(ty->name), ty);
+        if (attr.align)
+            var->align = attr.align;
+
         if (equal(tok, "=")) {
             Node *expr = lvar_initializer(&tok, tok->next, var);
             cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
@@ -727,7 +771,7 @@ static Initializer *array_initializer(Token **rest, Token *tok, Type *ty) {
 }
 
 // struct-initializer = "{" initializer ("," initializer)* ","? "}"
-//                   | initializer ("," initializer)* ","
+//                    | initializer ("," initializer)* ","
 static Initializer *struct_initializer(Token **rest, Token *tok, Type *ty) {
     if (!equal(tok, "{")) { // e.g. struct tag x = num;
         Token *tok2;
@@ -883,7 +927,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     }
 
     Var *var = NULL;
-    long val  = eval2(init->expr, &var);
+    long val = eval2(init->expr, &var);
 
     if (var) {
         Relocation *rel = calloc(1, sizeof(Relocation));
@@ -902,7 +946,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 // embedded to .data section. This function serializes Initializer
 // objects to a flat byte array. It is a compile error if an
 // initializer list contains a non-constant expression.
-static void *gvar_initializer(Token **rest, Token *tok, Var *var) {
+static void gvar_initializer(Token **rest, Token *tok, Var *var) {
     Initializer *init = initializer(rest, tok, var->ty);
 
     Relocation head = {};
@@ -916,7 +960,7 @@ static void *gvar_initializer(Token **rest, Token *tok, Var *var) {
 static bool is_typename(Token *tok) {
     static char *kw[] = {
         "void", "_Bool", "char", "short", "int", "long", "struct", "union",
-        "typedef", "enum", "static",
+        "typedef", "enum", "static", "extern", "_Alignas",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -925,22 +969,27 @@ static bool is_typename(Token *tok) {
     return find_typedef(tok);
 }
 
-// stmt = "return" expr ";"
+// stmt = "return" expr? ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "switch" "(" expr ")" stmt
 //      | "case" const-expr ":" stmt
 //      | "default" ":" stmt
 //      | "for" "(" (expr? ";" | declaration) expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
+//      | "do" stmt "while" "(" expr ")" ";"
 //      | "break" ";"
 //      | "continue" ";"
 //      | "goto" ident ";"
+//      | ";"
 //      | ident ":" stmt
 //      | "{" compound-stmt
 //      | expr ";"
 static Node *stmt(Token **rest, Token *tok) {
     if (equal(tok, "return")) {
         Node *node = new_node(ND_RETURN, tok);
+        if (consume(rest, tok->next, ";"))
+            return node;
+            
         Node *exp = expr(&tok, tok->next);
         *rest = skip(tok, ";");
 
@@ -1035,6 +1084,17 @@ static Node *stmt(Token **rest, Token *tok) {
         return node;
     }
 
+    if (equal(tok, "do")) {
+        Node *node = new_node(ND_DO, tok);
+        node->then = stmt(&tok, tok->next);
+        tok = skip(tok, "while");
+        tok = skip(tok, "(");
+        node->cond = expr(&tok, tok);
+        tok = skip(tok, ")");
+        *rest = skip(tok, ";");
+        return node;
+    }
+
     if (equal(tok, "break")) {
         *rest = skip(tok->next, ";");
         return new_node(ND_BREAK, tok);
@@ -1049,6 +1109,12 @@ static Node *stmt(Token **rest, Token *tok) {
         Node *node = new_node(ND_GOTO, tok);
         node->label_name = get_ident(tok->next);
         *rest = skip(tok->next->next, ";");
+        return node;
+    }
+
+    if (equal(tok, ";")) {
+        Node *node = new_node(ND_BLOCK, tok);
+        *rest = tok->next;
         return node;
     }
 
@@ -1067,7 +1133,7 @@ static Node *stmt(Token **rest, Token *tok) {
     return node;
 }
 
-// compound-stmt = (declaration | stmt)* "}"
+// compound-stmt = (declaration | stmt)* "}"      // compound-stmt is known as "block"
 static Node *compound_stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_BLOCK, tok);
     Node head = {};
@@ -1172,7 +1238,7 @@ static long eval2(Node *node, Var **var) {
     case ND_NUM:
         return node->val;
     case ND_ADDR:
-        if (!var || *var || node->lhs->kind != ND_VAR)
+        if (!var || *var || node->lhs->kind != ND_VAR || node->lhs->var->is_local)
             error_tok(node->tok, "invalid initializer");
         *var = node->lhs->var;
         return 0;
@@ -1507,14 +1573,35 @@ static Node *mul(Token **rest, Token *tok) {
     }
 }
 
-// cast = "(" type-name ")" cast | unary
+// compound-literal = initializer "}"  // compound-literal is unnamed object of array or struct.
+static Node *compound_literal(Token **rest, Token *tok, Type *ty, Token *start) {
+    if (scope_depth == 0) {
+        Var *var = new_gvar(new_gvar_name(), ty, true, true);
+        gvar_initializer(rest, tok, var);
+        return new_var_node(var, start);
+    }
+
+    Var *var = new_lvar(new_gvar_name(), ty);
+    Node *lhs = lvar_initializer(rest, tok, var);
+    Node *rhs = new_var_node(var, tok); // In the end, rhs has compound-literal object.
+    return new_binary(ND_COMMA, lhs, rhs, tok);
+}
+
+// cast = "(" type-name ")" "{" compound-literal
+//      | "(" type-name ")" cast 
+//      | unary
 static Node *cast(Token **rest, Token *tok) {
     if (equal(tok, "(") && is_typename(tok->next)) {
-        Node *node = new_node(ND_CAST, tok);
-        node->ty = typename(&tok, tok->next);
+        Token *start = tok;
+        Type *ty = typename(&tok, tok->next);
         tok = skip(tok, ")");
-        node->lhs = cast(rest, tok);
+
+        if (equal(tok, "{"))
+            return compound_literal(rest, tok, ty, start);
+        
+        Node *node = new_unary(ND_CAST, cast(rest, tok), start);
         add_type(node->lhs);
+        node->ty = ty;
         return node;
     }
 
@@ -1560,7 +1647,8 @@ static Member *struct_members(Token **rest, Token *tok) {
     Member *cur = &head;
 
     while (!equal(tok, "}")) {
-        Type *basety = typespec(&tok, tok, NULL);
+        VarAttr attr = {};
+        Type *basety = typespec(&tok, tok, &attr);
         int cnt = 0;
 
         while (!consume(&tok, tok, ";")) {
@@ -1570,6 +1658,7 @@ static Member *struct_members(Token **rest, Token *tok) {
             Member *mem = calloc(1, sizeof(Member));
             mem->ty = declarator(&tok, tok, basety);
             mem->name = mem->ty->name;
+            mem->align = attr.align ? attr.align : mem->ty->align;
             cur = cur->next = mem;
         }
     }
@@ -1628,12 +1717,12 @@ static Type *struct_decl(Token **rest, Token *tok) {
     // Assign offsets within the struct to members.
     int offset = 0;
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        offset = align_to(offset, mem->ty->align);
+        offset = align_to(offset, mem->align);
         mem->offset = offset;
         offset += size_of(mem->ty);
         
-        if (ty->align < mem->ty->align)
-            ty->align = mem->ty->align;
+        if (ty->align < mem->align)
+            ty->align = mem->align;
     }
     ty->size = align_to(offset, ty->align);
     return ty;
@@ -1647,8 +1736,8 @@ static Type *union_decl(Token **rest, Token *tok) {
     // are already initialized to zero. We need to compute the
     // alignment and the size though.
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        if (ty->align < mem->ty->align)
-            ty->align = mem->ty->align;
+        if (ty->align < mem->align)
+            ty->align = mem->align;
         if (ty->size < size_of(mem->ty))
             ty->size = size_of(mem->ty);
     }
@@ -1804,6 +1893,7 @@ static Node *funcall(Token **rest, Token *tok) {
 //         | "(" expr ")"
 //         | "sizeof" "(" type-name ")"
 //         | "sizeof" unary
+//         | "alignof" "(" type-name ")"
 //         | ident func-args?
 //         | str
 //         | num
@@ -1839,6 +1929,13 @@ static Node *primary(Token **rest, Token *tok) {
         Node *node = unary(rest, tok->next);
         add_type(node);
         return new_num(size_of(node->ty), tok);
+    }
+
+    if (equal(tok, "alignof")) {
+        tok = skip(tok->next, "(");
+        Type *ty = typename(&tok, tok);
+        *rest = skip(tok, ")");
+        return new_num(ty->align, tok);
     }
 
     if (tok->kind == TK_IDENT) {
@@ -1877,6 +1974,10 @@ static Node *primary(Token **rest, Token *tok) {
 
 // program = (funcdef | global-var)*
 Program *parse(Token *tok) {
+    // Add built-in function types.
+    new_gvar("__builtin_va_start", func_type(ty_void), true, false);
+
+    // Read source code until EOF.
     Function head = {};
     Function *cur = &head;
     globals = NULL;
@@ -1885,6 +1986,8 @@ Program *parse(Token *tok) {
         Token *start = tok;
         VarAttr attr = {};
         Type *basety = typespec(&tok, tok, &attr);
+        if (consume(&tok, tok, ";"))
+            continue;
         Type *ty = declarator(&tok, tok, basety);
 
         // Typedef
@@ -1901,7 +2004,7 @@ Program *parse(Token *tok) {
 
         // Function
         if (ty->kind == TY_FUNC) {
-            current_fn = new_gvar(get_ident(ty->name), ty, false);
+            current_fn = new_gvar(get_ident(ty->name), ty, attr.is_static, false);
             if (!consume(&tok, tok, ";"))
                 cur = cur->next = funcdef(&tok, start);
             continue;
@@ -1909,9 +2012,13 @@ Program *parse(Token *tok) {
 
         // Global variable
         for (;;) {
-            Var *var = new_gvar(get_ident(ty->name), ty, true);
+            Var *var = new_gvar(get_ident(ty->name), ty, attr.is_static, !attr.is_extern);
+            if (attr.align)
+                var->align = attr.align;
+
             if (equal(tok, "="))
                 gvar_initializer(&tok, tok->next, var);
+
             if (consume(&tok, tok, ";"))
                 break;
             tok = skip(tok, ",");

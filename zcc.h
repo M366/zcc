@@ -12,6 +12,7 @@
 typedef struct Type Type;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
+
 //
 // tokenize.c
 //
@@ -59,11 +60,13 @@ struct Var {
     char *name;    // Variable name
     Type *ty;      // Type
     bool is_local; // local or global
+    int align;     // alignment
 
     // Local variable
     int offset;
 
     // Global variable
+    bool is_static;
     char *init_data;
     Relocation *rel;
 };
@@ -108,6 +111,7 @@ typedef enum {
     ND_RETURN,    // "return"
     ND_IF,        // "if"
     ND_FOR,       // "for" or "while"
+    ND_DO,        // "do"
     ND_SWITCH,    // "switch"
     ND_CASE,      // "case"
     ND_BLOCK,     // { ... }
@@ -176,6 +180,7 @@ struct Function {
     char *name;
     Var *params;
     bool is_static;
+    bool is_variadic;
 
     Node *node;
     Var *locals;
@@ -236,6 +241,7 @@ struct Type {
     // Function type
     Type *return_ty;
     Type *params;
+    bool is_variadic;
     Type *next;
 };
 
@@ -245,6 +251,7 @@ struct Member {
     Type *ty;
     Token *tok; // for error message
     Token *name;
+    int align;
     int offset;
 };
 
