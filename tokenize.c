@@ -130,7 +130,8 @@ static bool is_keyword(Token *tok) {
         "return", "if", "else", "for", "while", "int", "sizeof", "char",
         "struct", "union", "short", "long", "void", "typedef", "_Bool",
         "enum", "static", "break", "continue", "goto", "switch", "case",
-        "default", "extern", "alignof", "_Alignas", "do",
+        "default", "extern", "alignof", "_Alignas", "do", "signed",
+        "unsigned", "const", "volatile",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -231,17 +232,19 @@ static Token *read_char_literal(Token *cur, char *start) {
 
     Token *tok = new_token(TK_NUM, cur, start, p - start);
     tok->val = c;
+    tok->ty = ty_int;
     return tok;
 }
 
 static Token *read_int_literal(Token *cur, char *start) {
     char *p = start;
 
+    // Read a binary, octal, decimal or hexadecimal number.
     int base = 10;
-    if (!strncasecmp(p, "0x", 2) && is_alnum(p[2])) {
+    if (!strncasecmp(p, "0x", 2) && is_hex(p[2])) {
         p += 2;
         base = 16;
-    } else if (!strncasecmp(p, "0b", 2) && is_alnum(p[2])) { // 0b prefix is GCC extension
+    } else if (!strncasecmp(p, "0b", 2) && (p[2] == '0' || p[2] == '1')) { // 0b prefix is GCC extension
         p += 2;
         base = 2;
     } else if (*p == '0') {
@@ -249,11 +252,65 @@ static Token *read_int_literal(Token *cur, char *start) {
     }
 
     long val = strtoul(p, &p, base);
+
+    // Read U, L or LL suffixes.
+    bool l = false;
+    bool u = false;
+
+    if (startswith(p, "LLU") || startswith(p, "LLu") ||
+        startswith(p, "llU") || startswith(p, "llu") ||
+        startswith(p, "ULL") || startswith(p, "Ull") ||
+        startswith(p, "uLL") || startswith(p, "ull")) {
+        p += 3;
+        l = u = true;
+    } else if (!strncasecmp(p, "lu", 2) || !strncasecmp(p, "ul", 2)) {
+        p += 2;
+        l = u = true;
+    } else if (!strncasecmp(p, "LL", 2) || !strncasecmp(p, "ll", 2)) {
+        p += 2;
+        l = true;
+    } else if (*p == 'L' || *p == 'l') {
+        p++;
+        l = true;
+    } else if (*p == 'U' || *p == 'u') {
+        p++;
+        u = true;
+    }
+    
+    // Infer a type.
+    Type *ty;
+    if (base == 10) {
+        if (l && u)
+            ty = ty_ulong;
+        else if (l)
+            ty = ty_long;
+        else if (u)
+            ty = (val >> 32) ? ty_ulong : ty_uint;
+        else
+            ty = (val >> 31) ? ty_long : ty_int;
+    } else {
+        if (l && u)
+            ty = ty_ulong;
+        else if (l)
+            ty = (val >> 63) ? ty_ulong : ty_long;
+        else if (u)
+            ty = (val >> 32) ? ty_ulong : ty_uint;
+        else if (val >> 63)
+            ty = ty_ulong;
+        else if (val >> 32)
+            ty = ty_long;
+        else if (val >> 31)
+            ty = ty_uint;
+        else
+            ty = ty_int;
+    }
+
     if (is_alnum(*p))
         error_at(p, "invalid digit");
     
     Token *tok = new_token(TK_NUM, cur, start, p - start);
     tok->val = val;
+    tok->ty = ty;
     return tok;
 }
 

@@ -8,6 +8,11 @@ Type *ty_short = &(Type){TY_SHORT, 2, 2};
 Type *ty_int = &(Type){TY_INT, 4, 4};
 Type *ty_long = &(Type){TY_LONG, 8, 8};
 
+Type *ty_uchar = &(Type){TY_CHAR, 1, 1, true};
+Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
+Type *ty_uint = &(Type){TY_INT, 4, 4, true};
+Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
+
 static Type *new_type(TypeKind kind, int size, int align) {
     Type *ty = malloc(sizeof(Type));
     ty->kind = kind;
@@ -75,9 +80,18 @@ int size_of(Type *ty) {
 static Type *get_common_type(Type *ty1, Type *ty2) {
     if (ty1->base)
         return pointer_to(ty1->base);
-    if (size_of(ty1) == 8 || size_of(ty2) == 8)
-        return ty_long;
-    return ty_int;
+
+    if (size_of(ty1) < 4)
+        ty1 = ty_int;
+    if (size_of(ty2) < 4)
+        ty2 = ty_int;
+
+    if (size_of(ty1) !=  size_of(ty2))
+        return size_of(ty1) < size_of(ty2) ? ty2 : ty1;
+
+    if (ty2->is_unsigned)
+        return ty2;
+    return ty1; // Return ty1 regardless of whether ty1 is unsigned or signed.
 }
 
 // For many binary operators, we implicitly promote operands so that
@@ -110,7 +124,7 @@ void add_type(Node *node) {
     
     switch (node->kind) {
     case ND_NUM:
-        node->ty = (node->val == (int)node->val) ? ty_int : ty_long;
+        node->ty = ty_int;
         return;
     case ND_ADD:
     case ND_SUB:
@@ -162,13 +176,20 @@ void add_type(Node *node) {
     case ND_MEMBER:
         node->ty = node->member->ty;
         return;
-    case ND_ADDR:
-        if (node->lhs->ty->kind == TY_ARRAY)
-            node->ty = pointer_to(node->lhs->ty->base);
+    case ND_ADDR: {
+        Type *ty = node->lhs->ty;
+        if (ty->kind == TY_ARRAY)
+            node->ty = pointer_to(ty->base);
         else
-            node->ty = pointer_to(node->lhs->ty);
+            node->ty = pointer_to(ty);
         return;
+    }
     case ND_DEREF:
+        if (node->lhs->ty->kind == TY_FUNC) {
+            *node = *node->lhs;
+            return;
+        }
+
         if (!node->lhs->ty->base)
             error_tok(node->tok, "invalid pointer dereference");
         if (node->lhs->ty->base->kind == TY_VOID)

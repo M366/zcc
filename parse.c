@@ -74,7 +74,7 @@ struct Initializer {
 
 // For local variable initializer.
 typedef struct InitDesg InitDesg;
-struct InitDesg { // initializer designer
+struct InitDesg { // initializer designator
     InitDesg *next;
     int idx;
     Member *member;
@@ -139,6 +139,7 @@ static Node *cast(Token **rest, Token *tok);
 static Type *struct_decl(Token **rest, Token *tok);
 static Type *union_decl(Token **rest, Token *tok);
 static Node *postfix(Token **rest, Token *tok);
+static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 
@@ -194,6 +195,13 @@ static Node *new_unary(NodeKind kind, Node *expr, Token *tok) {
 static Node *new_num(long val, Token *tok) {
     Node *node = new_node(ND_NUM, tok);
     node->val = val;
+    return node;
+}
+
+static Node *new_ulong(long val, Token *tok) {
+    Node *node = new_node(ND_NUM, tok);
+    node->val = val;
+    node->ty = ty_ulong;
     return node;
 }
 
@@ -313,14 +321,20 @@ static Function *funcdef(Token **rest, Token *tok) {
     Type *ty = typespec(&tok, tok, &attr);
     ty = declarator(&tok, tok, ty);
 
+    if (!ty->name)
+        error_tok(ty->name_pos, "function name omitted");
+
     Function *fn = calloc(1, sizeof(Function));
     fn->name = get_ident(ty->name);
     fn->is_static = attr.is_static;
     fn->is_variadic = ty->is_variadic;
 
     enter_scope();
-    for (Type *t = ty->params; t; t = t->next)
+    for (Type *t = ty->params; t; t = t->next) {
+        if (!t->name)
+            error_tok(t->name_pos, "parameter name omitted");
         new_lvar(get_ident(t->name), t);
+    }
     fn->params = locals;
 
     tok = skip(tok, "{");
@@ -351,17 +365,20 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
     // keyword "void" so far. With this, we can use a switch statement
     // as you can see below.
     enum {
-        VOID  = 1 << 0,
-        BOOL  = 1 << 2,
-        CHAR  = 1 << 4,
-        SHORT = 1 << 6,
-        INT   = 1 << 8,
-        LONG  = 1 << 10,
-        OTHER = 1 << 12,
+        VOID     = 1 << 0,
+        BOOL     = 1 << 2,
+        CHAR     = 1 << 4,
+        SHORT    = 1 << 6,
+        INT      = 1 << 8,
+        LONG     = 1 << 10,
+        OTHER    = 1 << 12,
+        SIGNED   = 1 << 13,
+        UNSIGNED = 1 << 14,
     };
 
     Type *ty = ty_int;
     int counter = 0;
+    bool is_const = false;
 
     while (is_typename(tok)) {
         // Handle storage class specifiers.
@@ -381,6 +398,14 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
             tok = tok->next;
             continue;
         }
+
+        if (consume(&tok, tok, "const")) {
+            is_const = true;
+            continue;
+        }
+
+        if (consume(&tok, tok, "volatile"))
+            continue;
 
         if (equal(tok, "_Alignas")) {
             if (!attr)
@@ -429,6 +454,10 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
             counter += INT;
         else if (equal(tok, "long"))
             counter += LONG;
+        else if (equal(tok, "signed"))
+            counter |= SIGNED;
+        else if (equal(tok, "unsigned"))
+            counter |= UNSIGNED;
         else
             error_tok(tok, "internal error");
         
@@ -440,26 +469,57 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
             ty = ty_bool;
             break;
         case CHAR:
+        case SIGNED + CHAR:
             ty = ty_char;
+            break;
+        case UNSIGNED + CHAR:
+            ty = ty_uchar;
             break;
         case SHORT:
         case SHORT + INT:
+        case SIGNED + SHORT:
+        case SIGNED + SHORT + INT:
             ty = ty_short;
             break;
+        case UNSIGNED + SHORT:
+        case UNSIGNED + SHORT + INT:
+            ty = ty_ushort;
+            break;
         case INT:
+        case SIGNED:
+        case SIGNED + INT:
             ty = ty_int;
+            break;
+        case UNSIGNED:
+        case UNSIGNED + INT:
+            ty = ty_uint;
             break;
         case LONG:
         case LONG + INT:
         case LONG + LONG:
         case LONG + LONG + INT:
+        case SIGNED + LONG:
+        case SIGNED + LONG + INT:
+        case SIGNED + LONG + LONG:
+        case SIGNED + LONG + LONG + INT:
             ty = ty_long;
+            break;
+        case UNSIGNED + LONG:
+        case UNSIGNED + LONG + INT:
+        case UNSIGNED + LONG + LONG:
+        case UNSIGNED + LONG + LONG + INT:
+            ty = ty_ulong;
             break;
         default:
             error_tok(tok, "invalid type");
         }
 
         tok = tok->next;
+    }
+
+    if (is_const) {
+        ty = copy_type(ty);
+        ty->is_const = true;
     }
 
     *rest = tok;
@@ -539,10 +599,23 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
     return ty;
 }
 
-// declarator = "*"* ("(" declarator ")" | ident) type-suffix
-static Type *declarator(Token **rest, Token *tok, Type *ty) {
-    while (consume(&tok, tok, "*"))
+// pointers = ("*" ("const" | "volatile")*)*
+static Type *pointers(Token **rest, Token *tok, Type *ty) {
+    while (consume(&tok, tok, "*")) {
         ty = pointer_to(ty);
+        while (equal(tok, "const") || equal(tok, "volatile")) {
+            if (equal(tok, "const"))
+                ty->is_const = true;
+            tok = tok->next;
+        }
+    }
+    *rest = tok;
+    return ty;
+}
+
+// declarator = pointers ("(" declarator ")" | ident) type-suffix
+static Type *declarator(Token **rest, Token *tok, Type *ty) {
+    ty = pointers(&tok, tok, ty);
 
     if (equal(tok, "(")) {
         Type *placeholder = calloc(1, sizeof(Type));
@@ -552,19 +625,23 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
         return new_ty;
     }
 
-    if (tok->kind != TK_IDENT)
-        error_tok(tok, "expected a variable name");
-    ty = type_suffix(rest, tok->next, ty);
-    ty->name = tok;
+    Token *name = NULL;
+    Token *name_pos = tok;
+
+    if (tok->kind == TK_IDENT) {
+        name = tok;
+        tok = tok->next;
+    }
+
+    ty = type_suffix(rest, tok, ty);
+    ty->name = name;
+    ty->name_pos = name_pos;
     return ty;
 }
 
-// abstract-declarator = "*"* ("(" abstract-declarator ")")? type-suffix
+// abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
-    while (equal(tok, "*")) {
-        ty = pointer_to(ty);
-        tok = tok->next;
-    }
+    ty = pointers(&tok, tok, ty);
 
     if (equal(tok, "(")) {
         Type *placeholder = calloc(1, sizeof(Type));
@@ -664,6 +741,8 @@ static Node *declaration(Token **rest, Token *tok) {
             tok = skip(tok, ",");
         
         Type *ty = declarator(&tok, tok, basety);
+        if (!ty->name)
+            error_tok(ty->name_pos, "variable declared void");
         if (ty->kind == TY_VOID)
             error_tok(tok, "variable declared void");
 
@@ -867,7 +946,9 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
 
     Node *lhs = init_desg_expr(desg, tok); // lvar: var or array element as `*(pointer + idx)`
     Node *rhs = init ? init->expr : new_num(0, tok);
-    return new_binary(ND_ASSIGN, lhs, rhs, tok);
+    Node *expr = new_binary(ND_ASSIGN, lhs, rhs, tok);
+    expr->is_init = true;
+    return expr;
 }
 
 // A variable definition with an initializer is a shorthand notation
@@ -960,7 +1041,8 @@ static void gvar_initializer(Token **rest, Token *tok, Var *var) {
 static bool is_typename(Token *tok) {
     static char *kw[] = {
         "void", "_Bool", "char", "short", "int", "long", "struct", "union",
-        "typedef", "enum", "static", "extern", "_Alignas",
+        "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
+        "const", "volatile",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -1195,6 +1277,8 @@ static long eval2(Node *node, Var **var) {
     case ND_MUL:
         return eval(node->lhs) * eval(node->rhs);
     case ND_DIV:
+        if (node->ty->is_unsigned)
+            return (unsigned long)eval(node->lhs) / eval(node->rhs);
         return eval(node->lhs) / eval(node->rhs);
     case ND_BITAND:
         return eval(node->lhs) & eval(node->rhs);
@@ -1205,14 +1289,20 @@ static long eval2(Node *node, Var **var) {
     case ND_SHL:
         return eval(node->lhs) << eval(node->rhs);
     case ND_SHR:
+        if (node->ty->is_unsigned && size_of(node->ty) == 8)
+            return (unsigned long)eval(node->lhs) >> eval(node->rhs);
         return eval(node->lhs) >> eval(node->rhs);
     case ND_EQ:
         return eval(node->lhs) == eval(node->rhs);
     case ND_NE:
         return eval(node->lhs) != eval(node->rhs);
     case ND_LT:
+        if (node->lhs->ty->is_unsigned)
+            return (unsigned long)eval(node->lhs) < eval(node->rhs);
         return eval(node->lhs) < eval(node->rhs);
     case ND_LE:
+        if (node->lhs->ty->is_unsigned)
+            return (unsigned long)eval(node->lhs) <= eval(node->rhs);
         return eval(node->lhs) <= eval(node->rhs);
     case ND_COND:
         return eval(node->cond) ? eval(node->then) : eval(node->els);
@@ -1226,15 +1316,27 @@ static long eval2(Node *node, Var **var) {
         return eval(node->lhs) && eval(node->rhs);
     case ND_LOGOR:
         return eval(node->lhs) || eval(node->rhs);
-    case ND_CAST:
-        if (is_integer(node->ty)) {
-            switch (size_of(node->ty)) {
-            case 1: return (char)eval(node->lhs);
-            case 2: return (short)eval(node->lhs);
-            case 4: return (int)eval(node->lhs);
-            }
+    case ND_CAST: {
+        long val = eval2(node->lhs, var);
+        if (!is_integer(node->ty) || size_of(node->ty) == 8)
+            return val;
+
+        switch (size_of(node->ty)) {
+        case 1:
+            if (node->ty->is_unsigned)
+                return (unsigned char)val;
+            return (char)val;
+        case 2:
+            if (node->ty->is_unsigned)
+                return (unsigned short)val;
+            return (short)val;
+        default:
+            assert(size_of(node->ty) == 4);
+            if (node->ty->is_unsigned)
+                return (unsigned int)val;
+            return (int)val;
         }
-        return eval2(node->lhs, var);
+    }
     case ND_NUM:
         return node->val;
     case ND_ADDR:
@@ -1785,11 +1887,21 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
     return new_binary(ND_COMMA, expr1, new_binary(ND_COMMA, expr2, expr3, tok), tok);
 }
 
-// postfix = primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
+// postfix = ident "(" func-args ")" postfix-tail*
+//         | primary postfix-tail*
+//
+// postfix-tail = ("[" expr "]" | "(" func-args ")"
+//              | "." ident | "->" ident | "++" | "--")
 static Node *postfix(Token **rest, Token *tok) {
+    Token *start = tok;
     Node *node = primary(&tok, tok);
 
     for (;;) {
+        if (equal(tok, "(")) {
+            node = funcall(&tok, tok->next, node);
+            continue;
+        }
+
         if (equal(tok, "[")) {
             // x[y] is short for *(x+y)
             Token *start = tok;
@@ -1830,28 +1942,21 @@ static Node *postfix(Token **rest, Token *tok) {
     }
 }
 
-// funcall = ident "(" (assign ("," assign)*)? ")"
+// funcall = (assign ("," assign)*)? ")"
 //
 // foo(a,b,c) is compiled to ({ t1=a; t2=b; t3=c; foo(t1, t2, t3); })
 // where t1, t2 and t3 are fresh local variables.
-static Node *funcall(Token **rest, Token *tok) {
-    Token *start = tok;
-    tok = tok->next->next;
+static Node *funcall(Token **rest, Token *tok, Node *fn) {
+    add_type(fn);
 
-    VarScope *sc = find_var(start);
-    Type *ty;
-    if (sc) {
-        if (!sc->var || sc->var->ty->kind != TY_FUNC)
-            error_tok(start, "not a function");
-        ty = sc->var->ty;
-    } else {
-        warn_tok(start, "implicit declaration of a function");
-        ty = func_type(ty_int);
-    }
+    if (fn->ty->kind != TY_FUNC &&
+       (fn->ty->kind != TY_PTR || fn->ty->base->kind != TY_FUNC))
+        error_tok(fn->tok, "not a function");
 
     Node *node = new_node(ND_NULL_EXPR, tok);
     Var **args = NULL;
     int nargs = 0;
+    Type *ty = (fn->ty->kind == TY_FUNC) ? fn->ty : fn->ty->base;
     Type *param_ty = ty->params;
 
     while (!equal(tok, ")")) {
@@ -1880,8 +1985,7 @@ static Node *funcall(Token **rest, Token *tok) {
 
     *rest = skip(tok, ")");
 
-    Node *funcall = new_node(ND_FUNCALL, start);
-    funcall->funcname = strndup(start->loc, start->len);
+    Node *funcall = new_unary(ND_FUNCALL, fn, tok);
     funcall->func_ty = ty;
     funcall->ty = ty->return_ty;
     funcall->args = args;
@@ -1894,7 +1998,7 @@ static Node *funcall(Token **rest, Token *tok) {
 //         | "sizeof" "(" type-name ")"
 //         | "sizeof" unary
 //         | "alignof" "(" type-name ")"
-//         | ident func-args?
+//         | ident
 //         | str
 //         | num
 static Node *primary(Token **rest, Token *tok) {
@@ -1922,40 +2026,42 @@ static Node *primary(Token **rest, Token *tok) {
     if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
         Type *ty = typename(&tok, tok->next->next);
         *rest = skip(tok, ")");
-        return new_num(size_of(ty), tok);
+        return new_ulong(size_of(ty), tok);
     }
 
     if (equal(tok, "sizeof")) {
         Node *node = unary(rest, tok->next);
         add_type(node);
-        return new_num(size_of(node->ty), tok);
+        return new_ulong(size_of(node->ty), tok);
     }
 
     if (equal(tok, "alignof")) {
         tok = skip(tok->next, "(");
         Type *ty = typename(&tok, tok);
         *rest = skip(tok, ")");
-        return new_num(ty->align, tok);
+        return new_ulong(ty->align, tok);
     }
 
     if (tok->kind == TK_IDENT) {
-        // Function call
-        if (equal(tok->next, "("))
-            return funcall(rest, tok);
-        
         // Variable or enum constant
         VarScope *sc = find_var(tok);
-        if (!sc || (!sc->var && !sc->enum_ty))
-            error_tok(tok, "undefined variable");
-
-        Node *node;
-        if (sc->var)
-            node = new_var_node(sc->var, tok);
-        else
-            node = new_num(sc->enum_val, tok); // enum to num (codegen doesn't notting)
-
         *rest = tok->next;
-        return node;
+
+        if (sc) {
+            if (sc->var)
+                return new_var_node(sc->var, tok);
+            if (sc->enum_ty)
+                return new_num(sc->enum_val, tok);
+        }
+
+        if (equal(tok->next, "(")) {
+            warn_tok(tok, "implicit declaration of a function");
+            char *name = strndup(tok->loc, tok->len);
+            Var *var = new_gvar(name, func_type(ty_int), true, false);
+            return new_var_node(var, tok);
+        }
+
+        error_tok(tok, "undefined variable");
     }
 
     if (tok->kind == TK_STR) {
@@ -1968,6 +2074,7 @@ static Node *primary(Token **rest, Token *tok) {
         error_tok(tok, "expected expression");
 
     Node *node = new_num(tok->val, tok);
+    node->ty = tok->ty;
     *rest = tok->next;
     return node;
 }
@@ -1993,7 +2100,10 @@ Program *parse(Token *tok) {
         // Typedef
         if (attr.is_typedef) {
             for (;;) {
+                if (!ty->name)
+                    error_tok(ty->name_pos, "typedef name omitted");
                 push_scope(get_ident(ty->name))->type_def = ty;
+
                 if (consume(&tok, tok, ";"))
                     break;
                 tok = skip(tok, ",");
@@ -2012,6 +2122,9 @@ Program *parse(Token *tok) {
 
         // Global variable
         for (;;) {
+            if (!ty->name)
+                error_tok(ty->name_pos, "variable name omitted");
+
             Var *var = new_gvar(get_ident(ty->name), ty, attr.is_static, !attr.is_extern);
             if (attr.align)
                 var->align = attr.align;

@@ -59,7 +59,6 @@ EOF
     sed -i 's/\bNULL\b/0/g' $TMP/$1
     sed -i 's/INT_MAX/2147483647/g' $TMP/$1
     sed -i 's/\bva_start\b/__builtin_va_start/g' $TMP/$1
-    sed -i 's/\bunsigned\b//g' $TMP/$1
 
     (cd $TMP; ../$CC $1 > ${1%.c}.s)
     gcc -c -o $TMP/${1%.c}.o $TMP/${1%.c}.s

@@ -58,7 +58,7 @@ static void gen_addr(Node *node) {
 
 // Load a value from where the stack top is pointing to.
 static void load(Type *ty) {
-    if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT) {
+    if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT || ty->kind == TY_FUNC) {
         // If it is an array, do nothing because in general we can't load
         // an entire array to a register. As a result, the result of an
         // evaluation of an array becomes not the array itself but the
@@ -70,17 +70,18 @@ static void load(Type *ty) {
 
     char *rs = reg(top - 1);
     char *rd = xreg(ty, top - 1);
-    int sz = size_of(ty);
+    char *insn = ty->is_unsigned ? "movzx" : "movsx";
 
     // When we load a char or a short value to a register, we always
     // extend them to the size of int, so we can assume the lower half of
     // a register always contains a valid value. The upper half of a
     // register for char, short and int may contain garbage. When we load
     // a long value to a register, it simply occupies the entire register.
+    int sz = size_of(ty);
     if (sz == 1)
-        printf("  movsx %s, byte ptr [%s]\n", rd, rs);
+        printf("  %s %s, byte ptr [%s]\n", insn, rd, rs);
     else if (sz == 2)
-        printf("  movsx %s, word ptr [%s]\n", rd, rs);
+        printf("  %s %s, word ptr [%s]\n", insn, rd, rs);
     else if (sz == 4)
         printf("  mov %s, dword ptr [%s]\n", rd, rs);
     else
@@ -123,26 +124,39 @@ static void cast(Type *from, Type *to) {
         return;
     }
 
+    char *insn = to->is_unsigned ? "movzx" : "movsx";
+
     if (size_of(to) == 1)
-        printf("  movsx %s, %sb\n", r, r);
+        printf("  %s %s, %sb\n", insn, r, r);
     else if (size_of(to) == 2)
-        printf("  movsx %s, %sw\n", r, r);
+        printf("  %s %s, %sw\n", insn, r, r);
     else if (size_of(to) == 4)
         printf("  mov %sd, %sd\n", r, r);
-    else if (is_integer(from) && size_of(from) < 8)
+    else if (is_integer(from) && size_of(from) < 8 && !from->is_unsigned)
         printf("  movsx %s, %sd\n", r, r);
+
 }
 
 static void divmod(Node *node, char *rd, char *rs, char *r64, char *r32) {
     if (size_of(node->ty) == 8) {
         printf("  mov rax, %s\n", rd);
-        printf("  cqo\n");
-        printf("  idiv %s\n", rs);
+        if (node->ty->is_unsigned) {
+            printf("  mov rdx, 0\n");
+            printf("  div %s\n", rs);
+        } else {
+            printf("  cqo\n");
+            printf("  idiv %s\n", rs);
+        }
         printf("  mov %s, %s\n", rd, r64);
     } else {
         printf("  mov eax, %s\n", rd);
-        printf("  cdq\n");
-        printf("  idiv %s\n", rs);
+        if (node->ty->is_unsigned) {
+            printf("  mov edx, 0\n");
+            printf("  div %s\n", rs);
+        } else {
+            printf("  cdq\n");
+            printf("  idiv %s\n", rs);
+        }
         printf("  mov %s, %s\n", rd, r32);
     }
 }
@@ -165,7 +179,10 @@ static void gen_expr(Node *node) {
 
     switch (node->kind) {
     case ND_NUM:
-        printf("  mov %s, %lu\n", reg(top++), node->val);
+        if (node->ty->kind == TY_LONG)
+            printf("  movabs %s, %lu\n", reg(top++), node->val);
+        else
+            printf("  mov %s, %lu\n", reg(top++), node->val);
         return;
     case ND_VAR:
     case ND_MEMBER:
@@ -182,6 +199,8 @@ static void gen_expr(Node *node) {
     case ND_ASSIGN:
         if (node->ty->kind == TY_ARRAY)
             error_tok(node->tok, "not an lvalue");
+        if (node->lhs->ty->is_const && !node->is_init)
+            error_tok(node->tok, "cannot assign to a const variable");
 
         gen_expr(node->rhs);
         gen_addr(node->lhs);
@@ -258,7 +277,8 @@ static void gen_expr(Node *node) {
         return;
     }
     case ND_FUNCALL: {
-        if (!strcmp(node->funcname, "__builtin_va_start")) {
+        if (node->lhs->kind == ND_VAR &&
+            !strcmp(node->lhs->var->name, "__builtin_va_start")) {
             builtin_va_start(node);
             return;
         }
@@ -267,15 +287,18 @@ static void gen_expr(Node *node) {
         printf("  push r10\n");
         printf("  push r11\n");
 
+        gen_expr(node->lhs);
+
         // Load arguments from the stack.
         for (int i = 0; i < node->nargs; i++) {
             Var *arg = node->args[i];
+            char *insn = arg->ty->is_unsigned ? "movzx" : "movsx";
             int sz = size_of(arg->ty);
             
             if (sz == 1)
-                printf("  movsx %s, byte ptr [rbp-%d]\n", argreg32[i], arg->offset);
+                printf("  %s %s, byte ptr [rbp-%d]\n", insn, argreg32[i], arg->offset);
             else if (sz == 2)
-                printf("  movsx %s, word ptr [rbp-%d]\n", argreg32[i], arg->offset);
+                printf("  %s %s, word ptr [rbp-%d]\n", insn, argreg32[i], arg->offset);
             else if (sz == 4)
                 printf("  mov %s, dword ptr [rbp-%d]\n", argreg32[i], arg->offset);
             else
@@ -283,7 +306,7 @@ static void gen_expr(Node *node) {
         }
 
         printf("  mov rax, 0\n");
-        printf("  call %s\n", node->funcname);
+        printf("  call %s\n", reg(--top));
 
         // The System V x86-64 ABI has a special rule regarding a boolean
         // return value that only the lower 8 bits are valid for it and
@@ -344,12 +367,18 @@ static void gen_expr(Node *node) {
         return;
     case ND_LT:
         printf("  cmp %s, %s\n", rd, rs);
-        printf("  setl al\n");
+        if (node->lhs->ty->is_unsigned)
+            printf("  setb al\n");
+        else
+            printf("  setl al\n");
         printf("  movzx %s, al\n", rd);
         return;
     case ND_LE:
         printf("  cmp %s, %s\n", rd, rs);
-        printf("  setle al\n");
+        if (node->lhs->ty->is_unsigned)
+            printf("  setbe al\n");
+        else
+            printf("  setle al\n");
         printf("  movzx %s, al\n", rd);
         return;
     case ND_SHL:
@@ -358,7 +387,10 @@ static void gen_expr(Node *node) {
         return;
     case ND_SHR:
         printf("  mov rcx, %s\n", reg(top));
-        printf("  sar %s, cl\n", rd);
+        if (node->lhs->ty->is_unsigned)
+            printf("  shr %s, cl\n", rd);
+        else
+            printf("  sar %s, cl\n", rd);
         return;
     default:
         error_tok(node->tok, "invalid expression");

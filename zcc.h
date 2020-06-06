@@ -32,6 +32,7 @@ struct Token {
     TokenKind kind; // Token kind
     Token *next;    // Next token
     long val;       // If kind is TK_NUM, its value
+    Type *ty;       // Used if TK_NUM
     char *loc;      // Token location
     int len;        // Token length
 
@@ -59,6 +60,7 @@ struct Var {
     Var *next;
     char *name;    // Variable name
     Type *ty;      // Type
+    Token *tok;    // representative token
     bool is_local; // local or global
     int align;     // alignment
 
@@ -146,6 +148,9 @@ struct Node {
     Node *init;
     Node *inc;
 
+    // Assignment
+    bool is_init;
+
     // Block or statement expression
     Node *body;
     
@@ -153,7 +158,6 @@ struct Node {
     Member *member;
 
     // Function call
-    char *funcname;
     Type *func_ty;
     Var **args;
     int nargs;
@@ -217,7 +221,9 @@ struct Type {
     TypeKind kind;
     int size;           // sizeof() value
     int align;          // alignment
+    bool is_unsigned;   // unsigned or signed
     bool is_incomplete; // incomplete type
+    bool is_const;
 
     // Pointer-to or array-of type. We intentionally use the same member
     // to represent pointer/array duality in C.
@@ -231,6 +237,7 @@ struct Type {
 
     // Declaration
     Token *name;
+    Token *name_pos;
 
     // Array
     int array_len;
@@ -263,6 +270,11 @@ extern Type *ty_short;
 extern Type *ty_int;
 extern Type *ty_long;
 
+extern Type *ty_uchar;
+extern Type *ty_ushort;
+extern Type *ty_uint;
+extern Type *ty_ulong;
+
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);
 int align_to(int n, int align);
@@ -272,6 +284,7 @@ Type *array_of(Type *base, int size);
 Type *enum_type(void);
 Type *struct_type(void);
 int size_of(Type *ty);
+Type *copy_type(Type *ty);
 void add_type(Node *node);
 
 //
