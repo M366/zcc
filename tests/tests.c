@@ -153,6 +153,7 @@ typedef struct {
 
 int add_all1(int x, ...);
 int add_all3(int z, int b, int c, ...);
+
 int sprintf(char *buf, char *fmt, ...);
 int vsprintf(char *buf, char *fmt, va_list ap);
 
@@ -160,6 +161,10 @@ char *fmt(char *buf, char *fmt, ...) {
   va_list ap;
   __builtin_va_start(ap, fmt);
   vsprintf(buf, fmt, ap);
+}
+
+int (*fnptr(void))(int) {
+    return ret3;
 }
 
 int main() {
@@ -1044,6 +1049,12 @@ int main() {
   { volatile int x; }
   { volatile int volatile volatile x; }
   { int volatile * volatile volatile x; }
+
+
+  assert(5, (add2)(2,3), "(add2)(2,3)");
+  assert(5, (&add2)(2,3), "(&add2)(2,3)");
+  assert(7, ({ int (*fn)(int,int) = add2; fn(2,5); }), "({ int (*fn)(int,int) = add2; fn(2,5); })");
+  assert(3, fnptr()(), "fnptr()()");
 
   printf("OK\n");
   return 0;
