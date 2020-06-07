@@ -364,16 +364,31 @@ static void gen_expr(Node *node) {
         }
 
         // Save caller-saved registers
-        printf("  push r10\n");
-        printf("  push r11\n");
+        printf("  sub rsp, 64\n");
+        printf("  mov [rsp], r10\n");
+        printf("  mov [rsp+8], r11\n");
+        printf("  movsd [rsp+16], xmm8\n");
+        printf("  movsd [rsp+24], xmm9\n");
+        printf("  movsd [rsp+32], xmm10\n");
+        printf("  movsd [rsp+40], xmm11\n");
+        printf("  movsd [rsp+48], xmm12\n");
+        printf("  movsd [rsp+56], xmm13\n");
 
-        gen_expr(node->lhs);
+        gen_expr(node->lhs); // Load the fanction name to the register-machine
 
         // Load arguments from the stack.
+        int gp = 0, fp = 0;
         for (int i = 0; i < node->nargs; i++) {
             Var *arg = node->args[i];
             char *insn = arg->ty->is_unsigned ? "movzx" : "movsx";
             int sz = size_of(arg->ty);
+
+            if (is_flonum(arg->ty)) {
+                if (arg->ty->kind == TY_FLOAT)
+                    printf("  movss xmm%d, [rbp-%d]\n", fp++, arg->offset);
+                else
+                    printf("  movsd xmm%d, [rbp-%d]\n", fp++, arg->offset);
+            }
             
             if (sz == 1)
                 printf("  %s %s, byte ptr [rbp-%d]\n", insn, argreg32[i], arg->offset);
@@ -385,7 +400,8 @@ static void gen_expr(Node *node) {
                 printf("  mov %s, [rbp-%d]\n", argreg64[i], arg->offset);
         }
 
-        printf("  mov rax, 0\n");
+        // Call a function
+        printf("  mov rax, %d\n", fp);
         printf("  call %s\n", reg(--top));
 
         // The System V x86-64 ABI has a special rule regarding a boolean
@@ -395,12 +411,26 @@ static void gen_expr(Node *node) {
         if (node->ty->kind == TY_BOOL)
             printf("  movzx eax, al\n");
 
-        printf("  pop r11\n");
-        printf("  pop r10\n");
-        printf("  mov %s, rax\n", reg(top++));
+        // Restore caller-saved registers
+        printf("  mov r10, [rsp]\n");
+        printf("  mov r11, [rsp+8]\n");
+        printf("  movsd xmm8, [rsp+16]\n");
+        printf("  movsd xmm9, [rsp+24]\n");
+        printf("  movsd xmm10, [rsp+32]\n");
+        printf("  movsd xmm11, [rsp+40]\n");
+        printf("  movsd xmm12, [rsp+48]\n");
+        printf("  movsd xmm13, [rsp+56]\n");
+        printf("  add rsp, 64\n");
+        // Store the return value
+        if (node->ty->kind == TY_FLOAT)
+            printf("  movss %s, xmm0\n", freg(top++));
+        else if (node->ty->kind == TY_DOUBLE)
+            printf("  movsd %s, xmm0\n", freg(top++));
+        else
+            printf("  mov %s, rax\n", reg(top++));
         return;
-    }
-    }
+    } // ND_FANCALL
+    } // switch
 
     // Binary expressions
     gen_expr(node->lhs);
