@@ -120,11 +120,11 @@ static void store(Type *ty) {
 
 static void cmp_zero(Type *ty) {
     if (ty->kind == TY_FLOAT) {
-        printf("  xorps xmm0, xmm0\n"); // Bitwise Logical XOR of Packed Single Precision Floating-Point Values
-        printf("  ucomiss %s, xmm0\n", freg(--top)); // Unordered Compare Scalar Single-Precision Floating-Point Values and Set EFLAGS
+        printf("  xorps xmm0, xmm0\n"); // Perform bitwise logical XOR of packed single-precision floating-point values.
+        printf("  ucomiss %s, xmm0\n", freg(--top)); // Perform unordered comparison of scalar single-precision floating-point values and set flags in EFLAGS register.
     } else if (ty->kind == TY_DOUBLE) {
-        printf("  xorpd xmm0, xmm0\n"); // Bitwise Logical XOR of Packed Double Precision Floating-Point Values
-        printf("  ucomisd %s, xmm0\n", freg(--top)); // Unordered Compare Scalar Double-Precision Floating-Point Values and Set EFLAGS
+        printf("  xorpd xmm0, xmm0\n"); // Perform bitwise logical XOR of packed double-precision floating-point values.
+        printf("  ucomisd %s, xmm0\n", freg(--top)); // Perform unordered comparison of scalar double-precision floating-point values and set flags in EFLAGS register.
     } else {
         printf("  cmp %s, 0\n", reg(--top));
     }
@@ -150,9 +150,9 @@ static void cast(Type *from, Type *to) {
             return;
         
         if (to->kind == TY_DOUBLE)
-            printf("  cvtss2sd %s, %s\n", fr, fr); // Convert Scalar Single-Precision Floating-Point Value to Scalar Double-Precision Floating-Point Value
+            printf("  cvtss2sd %s, %s\n", fr, fr); // Convert scalar single-precision floating-point values to scalar double-precision floating-point values.
         else
-            printf("  cvttss2si %s, %s\n", r, fr); // Convert Scalar Single-Precision Floating-Point Value to Doubleword Integer
+            printf("  cvttss2si %s, %s\n", r, fr); // Convert with truncation a scalar single-precision floating-point value to a scalar double-word integer.
         return;
     }
 
@@ -161,19 +161,19 @@ static void cast(Type *from, Type *to) {
             return;
 
         if (to->kind == TY_FLOAT)
-            printf("  cvtsd2ss %s, %s\n", fr, fr); // Convert Scalar Double-Precision Floating-Point Value to Scalar Single-Precision Floating-Point Value
+            printf("  cvtsd2ss %s, %s\n", fr, fr); // Convert scalar double-precision floating-point values to scalar single-precision floating-point values.
         else
-            printf("  cvttsd2si %s, %s\n", r, fr); // Convert Scalar Double-Precision Floating-Point Value to Doubleword Integer
+            printf("  cvttsd2si %s, %s\n", r, fr); // Convert with truncation scalar double-precision floating-point values to scalar doubleword integers.
         return;
     }
     
     if (to->kind == TY_FLOAT) {
-        printf("  cvtsi2ss %s, %s\n", fr, r); // Convert Doubleword Integer to Scalar Single-Precision Floating-Point Value
+        printf("  cvtsi2ss %s, %s\n", fr, r); // Convert (scalar) Doubleword Integer to Scalar Single-Precision Floating-Point Value
         return;
     }
 
     if (to->kind == TY_DOUBLE) {
-        printf("  cvtsi2sd %s, %s\n", fr, r); // Convert Doubleword Integer to Scalar Double-Precision Floating-Point Value
+        printf("  cvtsi2sd %s, %s\n", fr, r); // Convert (scalar) Doubleword Integer to Scalar Double-Precision Floating-Point Value
         return;
     }
 
@@ -187,6 +187,7 @@ static void cast(Type *from, Type *to) {
         printf("  mov %sd, %sd\n", r, r);
     else if (is_integer(from) && size_of(from) < 8 && !from->is_unsigned)
         printf("  movsx %s, %sd\n", r, r);
+
 }
 
 static void divmod(Node *node, char *rd, char *rs, char *r64, char *r32) {
@@ -392,6 +393,8 @@ static void gen_expr(Node *node) {
 
     char *rd = xreg(node->lhs->ty, top - 2);
     char *rs = xreg(node->lhs->ty, top - 1);
+    char *fd = freg(top - 2);
+    char *fs = freg(top - 1);
     top--;
 
     switch (node->kind) {
@@ -420,29 +423,55 @@ static void gen_expr(Node *node) {
         printf("  xor %s, %s\n", rd, rs);
         return;
     case ND_EQ:
-        printf("  cmp %s, %s\n", rd, rs);
+        if (node->lhs->ty->kind == TY_FLOAT)
+            printf("  ucomiss %s, %s\n", fd, fs);
+        else if (node->lhs->ty->kind == TY_DOUBLE)
+            printf("  ucomisd %s, %s\n", fd, fs);
+        else
+            printf("  cmp %s, %s\n", rd, rs);
         printf("  sete al\n");
         printf("  movzx %s, al\n", rd);
         return;
     case ND_NE:
-        printf("  cmp %s, %s\n", rd, rs);
+        if (node->lhs->ty->kind == TY_FLOAT)
+            printf("  ucomiss %s, %s\n", fd, fs);
+        else if (node->lhs->ty->kind == TY_DOUBLE)
+            printf("  ucomisd %s, %s\n", fd, fs);
+        else
+            printf("  cmp %s, %s\n", rd, rs);
         printf("  setne al\n");
         printf("  movzx %s, al\n", rd);
         return;
     case ND_LT:
-        printf("  cmp %s, %s\n", rd, rs);
-        if (node->lhs->ty->is_unsigned)
+        if (node->lhs->ty->kind == TY_FLOAT) {
+            printf("  ucomiss %s, %s\n", fd, fs);
             printf("  setb al\n");
-        else
-            printf("  setl al\n");
+        } else if (node->lhs->ty->kind == TY_DOUBLE) {
+            printf("  ucomisd %s, %s\n", fd, fs);
+            printf("  setb al\n");
+        } else {
+            printf("  cmp %s, %s\n", rd, rs);
+            if (node->lhs->ty->is_unsigned)
+                printf("  setb al\n"); // Set byte if below.
+            else
+                printf("  setl al\n"); // Set byte if less.
+        }
         printf("  movzx %s, al\n", rd);
         return;
     case ND_LE:
-        printf("  cmp %s, %s\n", rd, rs);
-        if (node->lhs->ty->is_unsigned)
+        if (node->lhs->ty->kind == TY_FLOAT) {
+            printf("  ucomiss %s, %s\n", fd, fs);
             printf("  setbe al\n");
-        else
-            printf("  setle al\n");
+        } else if (node->lhs->ty->kind == TY_DOUBLE) {
+            printf("  ucomisd %s, %s\n", fd, fs);
+            printf("  setbe al\n");
+        } else {
+            printf("  cmp %s, %s\n", rd, rs);
+            if (node->lhs->ty->is_unsigned)
+                printf("  setbe al\n"); // Set byte if below or equal.
+            else
+                printf("  setle al\n");
+        }
         printf("  movzx %s, al\n", rd);
         return;
     case ND_SHL:
