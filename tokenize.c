@@ -15,7 +15,7 @@ void error(char *fmt, ...) {
     exit(1);
 }
 
-// Reports an error message in the following.
+// Reports an error message in the following format.
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
@@ -266,7 +266,7 @@ static Token *read_int_literal(Token *cur, char *start) {
     } else if (!strncasecmp(p, "lu", 2) || !strncasecmp(p, "ul", 2)) {
         p += 2;
         l = u = true;
-    } else if (!strncasecmp(p, "LL", 2) || !strncasecmp(p, "ll", 2)) {
+    } else if (startswith(p, "LL") || startswith(p, "ll")) {
         p += 2;
         l = true;
     } else if (*p == 'L' || *p == 'l') {
@@ -317,7 +317,7 @@ static Token *read_number(Token *cur, char *start) {
     if (!strchr(".eEfF", start[tok->len]))
         return tok;
 
-    // If it's not an integer, it must be a floating point constatn.
+    // If it's not an integer, it must be a floating point constant.
     char *end;
     double val = strtod(start, &end);
 

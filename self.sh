@@ -70,7 +70,7 @@ cc() {
 
 zcc main.c
 zcc type.c
-zcc parse.c # need "unsigned" keyword
+zcc parse.c
 zcc codegen.c
 zcc tokenize.c
 

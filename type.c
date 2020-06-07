@@ -26,8 +26,8 @@ static Type *new_type(TypeKind kind, int size, int align) {
 
 bool is_integer(Type *ty) {
     TypeKind k = ty->kind;
-    return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT ||
-           k == TY_LONG || k == TY_ENUM;
+    return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT ||
+           k == TY_INT  || k == TY_LONG || k == TY_ENUM;
 }
 
 bool is_flonum(Type *ty) {
@@ -102,8 +102,8 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
     if (size_of(ty2) < 4)
         ty2 = ty_int;
 
-    if (size_of(ty1) !=  size_of(ty2))
-        return size_of(ty1) < size_of(ty2) ? ty2 : ty1;
+    if (size_of(ty1) != size_of(ty2))
+        return (size_of(ty1) < size_of(ty2)) ? ty2 : ty1;
 
     if (ty2->is_unsigned)
         return ty2;
@@ -209,7 +209,7 @@ void add_type(Node *node) {
         if (!node->lhs->ty->base)
             error_tok(node->tok, "invalid pointer dereference");
         if (node->lhs->ty->base->kind == TY_VOID)
-            error_tok(node->tok, "dereferening a void pointer");
+            error_tok(node->tok, "dereferencing a void pointer");
 
         node->ty = node->lhs->ty->base;
         return;
