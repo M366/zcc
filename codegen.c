@@ -118,16 +118,62 @@ static void store(Type *ty) {
     top--;
 }
 
+static void cmp_zero(Type *ty) {
+    if (ty->kind == TY_FLOAT) {
+        printf("  xorps xmm0, xmm0\n"); // Bitwise Logical XOR of Packed Single Precision Floating-Point Values
+        printf("  ucomiss %s, xmm0\n", freg(--top)); // Unordered Compare Scalar Single-Precision Floating-Point Values and Set EFLAGS
+    } else if (ty->kind == TY_DOUBLE) {
+        printf("  xorpd xmm0, xmm0\n"); // Bitwise Logical XOR of Packed Double Precision Floating-Point Values
+        printf("  ucomisd %s, xmm0\n", freg(--top)); // Unordered Compare Scalar Double-Precision Floating-Point Values and Set EFLAGS
+    } else {
+        printf("  cmp %s, 0\n", reg(--top));
+    }
+}
+
 static void cast(Type *from, Type *to) {
     if (to->kind == TY_VOID)
         return;
     
     char *r = reg(top - 1);
+    char *fr = freg(top - 1);
 
     if (to->kind == TY_BOOL) {
-        printf("  cmp %s, 0\n", r);
-        printf("  setne %sb\n", r);
-        printf("  movzx %s, %sb\n", r, r);
+        cmp_zero(from);
+        printf("  setne %sb\n", reg(top));
+        printf("  movzx %s, %sb\n", reg(top), reg(top));
+        top++;
+        return;
+    }
+
+    if (from->kind == TY_FLOAT) {
+        if(to->kind == TY_FLOAT)
+            return;
+        
+        if (to->kind == TY_DOUBLE)
+            printf("  cvtss2sd %s, %s\n", fr, fr); // Convert Scalar Single-Precision Floating-Point Value to Scalar Double-Precision Floating-Point Value
+        else
+            printf("  cvttss2si %s, %s\n", r, fr); // Convert Scalar Single-Precision Floating-Point Value to Doubleword Integer
+        return;
+    }
+
+    if (from->kind == TY_DOUBLE) {
+        if (to->kind == TY_DOUBLE)
+            return;
+
+        if (to->kind == TY_FLOAT)
+            printf("  cvtsd2ss %s, %s\n", fr, fr); // Convert Scalar Double-Precision Floating-Point Value to Scalar Single-Precision Floating-Point Value
+        else
+            printf("  cvttsd2si %s, %s\n", r, fr); // Convert Scalar Double-Precision Floating-Point Value to Doubleword Integer
+        return;
+    }
+    
+    if (to->kind == TY_FLOAT) {
+        printf("  cvtsi2ss %s, %s\n", fr, r); // Convert Doubleword Integer to Scalar Single-Precision Floating-Point Value
+        return;
+    }
+
+    if (to->kind == TY_DOUBLE) {
+        printf("  cvtsi2sd %s, %s\n", fr, r); // Convert Doubleword Integer to Scalar Double-Precision Floating-Point Value
         return;
     }
 
@@ -141,7 +187,6 @@ static void cast(Type *from, Type *to) {
         printf("  mov %sd, %sd\n", r, r);
     else if (is_integer(from) && size_of(from) < 8 && !from->is_unsigned)
         printf("  movsx %s, %sd\n", r, r);
-
 }
 
 static void divmod(Node *node, char *rd, char *rs, char *r64, char *r32) {
