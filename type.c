@@ -13,6 +13,9 @@ Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
 Type *ty_uint = &(Type){TY_INT, 4, 4, true};
 Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
 
+Type *ty_float = &(Type){TY_FLOAT, 4, 4};
+Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
+
 static Type *new_type(TypeKind kind, int size, int align) {
     Type *ty = malloc(sizeof(Type));
     ty->kind = kind;
@@ -23,12 +26,20 @@ static Type *new_type(TypeKind kind, int size, int align) {
 
 bool is_integer(Type *ty) {
     TypeKind k = ty->kind;
-    return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT ||
-           k == TY_LONG || k == TY_ENUM;
+    return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT ||
+           k == TY_INT  || k == TY_LONG || k == TY_ENUM;
+}
+
+bool is_flonum(Type *ty) {
+    return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+}
+
+bool is_numeric(Type *ty) {
+    return is_integer(ty) || is_flonum(ty);
 }
 
 static bool is_scalar(Type *ty) {
-    return is_integer(ty) || ty->base;
+    return is_numeric(ty) || ty->base;
 }
 
 Type *copy_type(Type *ty) {
@@ -81,13 +92,18 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
     if (ty1->base)
         return pointer_to(ty1->base);
 
+    if (ty1->kind == TY_DOUBLE || ty2->kind == TY_DOUBLE)
+        return ty_double;
+    if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
+        return ty_float;
+
     if (size_of(ty1) < 4)
         ty1 = ty_int;
     if (size_of(ty2) < 4)
         ty2 = ty_int;
 
-    if (size_of(ty1) !=  size_of(ty2))
-        return size_of(ty1) < size_of(ty2) ? ty2 : ty1;
+    if (size_of(ty1) != size_of(ty2))
+        return (size_of(ty1) < size_of(ty2)) ? ty2 : ty1;
 
     if (ty2->is_unsigned)
         return ty2;
@@ -193,7 +209,7 @@ void add_type(Node *node) {
         if (!node->lhs->ty->base)
             error_tok(node->tok, "invalid pointer dereference");
         if (node->lhs->ty->base->kind == TY_VOID)
-            error_tok(node->tok, "dereferening a void pointer");
+            error_tok(node->tok, "dereferencing a void pointer");
 
         node->ty = node->lhs->ty->base;
         return;

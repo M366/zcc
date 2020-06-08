@@ -15,7 +15,7 @@ void error(char *fmt, ...) {
     exit(1);
 }
 
-// Reports an error message in the following.
+// Reports an error message in the following format.
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
@@ -131,7 +131,7 @@ static bool is_keyword(Token *tok) {
         "struct", "union", "short", "long", "void", "typedef", "_Bool",
         "enum", "static", "break", "continue", "goto", "switch", "case",
         "default", "extern", "alignof", "_Alignas", "do", "signed",
-        "unsigned", "const", "volatile",
+        "unsigned", "const", "volatile", "float", "double",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -266,7 +266,7 @@ static Token *read_int_literal(Token *cur, char *start) {
     } else if (!strncasecmp(p, "lu", 2) || !strncasecmp(p, "ul", 2)) {
         p += 2;
         l = u = true;
-    } else if (!strncasecmp(p, "LL", 2) || !strncasecmp(p, "ll", 2)) {
+    } else if (startswith(p, "LL") || startswith(p, "ll")) {
         p += 2;
         l = true;
     } else if (*p == 'L' || *p == 'l') {
@@ -305,11 +305,35 @@ static Token *read_int_literal(Token *cur, char *start) {
             ty = ty_int;
     }
 
-    if (is_alnum(*p))
-        error_at(p, "invalid digit");
-    
     Token *tok = new_token(TK_NUM, cur, start, p - start);
     tok->val = val;
+    tok->ty = ty;
+    return tok;
+}
+
+static Token *read_number(Token *cur, char *start) {
+    // Try to parse as an integer constant.
+    Token *tok = read_int_literal(cur, start);
+    if (!strchr(".eEfF", start[tok->len]))
+        return tok;
+
+    // If it's not an integer, it must be a floating point constant.
+    char *end;
+    double val = strtod(start, &end);
+
+    Type *ty;
+    if (*end == 'f' || *end == 'F') {
+        ty = ty_float;
+        end++;
+    } else if (*end == 'l' || *end == 'L') {
+        ty = ty_double;
+        end++;
+    } else {
+        ty = ty_double;
+    }
+
+    tok = new_token(TK_NUM, cur, start, end - start);
+    tok->fval = val;
     tok->ty = ty;
     return tok;
 }
@@ -367,8 +391,8 @@ static Token *tokenize(char *filename, char *p) {
         }
 
         // Numeric literal
-        if (isdigit(*p)) {
-            cur = read_int_literal(cur, p);
+        if (isdigit(*p) || (p[0] == '.' && isdigit(p[1]))) {
+            cur = read_number(cur, p);
             p += cur->len;
             continue;
         }

@@ -9,6 +9,8 @@ int printf();
 int exit();
 int strcmp(char *p, char *q);
 int memcmp(char *, char *);
+double add_double(double x, double y);
+float add_float(float x, float y);
 
 int g1, g2[4];
 
@@ -37,6 +39,9 @@ struct {int a[2];} g30[2] = {{1, 2}, 3, 4};
 struct {int a[2];} g31[2] = {1, 2, 3, 4};
 char g33[][4] = {'f', 'o', 'o', 0, 'b', 'a', 'r', 0};
 char *g34 = {"foo"};
+
+float g40 = 1.5;
+double g41 = 0.0 ? 55 : (0, 1 + 1 * 5.0 / 2 * (double)2 * (int)2.0);
 
 typedef struct Tree {
     int val;
@@ -165,6 +170,14 @@ char *fmt(char *buf, char *fmt, ...) {
 
 int (*fnptr(void))(int) {
     return ret3;
+}
+
+double add_double3(double x, double y, double z) {
+  return x + y + z;
+}
+
+float add_float3(float x, float y, float z) {
+  return x + y + z;
 }
 
 int main() {
@@ -1056,6 +1069,128 @@ int main() {
   assert(7, ({ int (*fn)(int,int) = add2; fn(2,5); }), "({ int (*fn)(int,int) = add2; fn(2,5); })");
   assert(3, fnptr()(), "fnptr()()");
   assert(5, (***add2)(2,3), "(***add2)(2,3)");
+
+  0.0;
+  1.0;
+  3e+8;
+  0x10.1p0;
+  .1E4f;
+
+  assert(4, sizeof(8f), "sizeof(8f)");
+  assert(4, sizeof(0.3F), "sizeof(0.3F)");
+  assert(8, sizeof(0.), "sizeof(0.)");
+  assert(8, sizeof(.0), "sizeof(.0)");
+  assert(8, sizeof(5.l), "sizeof(5.l)");
+  assert(8, sizeof(2.0L), "sizeof(2.0L)");
+
+  assert(1, 2e3==2e3, "2e3==2e3");
+  assert(0, 2e3==2e5, "2e3==2e5");
+  assert(1, 2.0==2, "2.0==2");
+  assert(0, 5.1<5, "5.1<5");
+  assert(0, 5.0<5, "5.0<5");
+  assert(1, 4.9<5, "4.9<5");
+  assert(0, 5.1<=5, "5.1<=5");
+  assert(1, 5.0<=5, "5.0<=5");
+  assert(1, 4.9<=5, "4.9<=5");
+
+  assert(1, 2e3f==2e3, "2e3f==2e3");
+  assert(0, 2e3f==2e5, "2e3f==2e5");
+  assert(1, 2.0f==2, "2.0f==2");
+  assert(0, 5.1f<5, "5.1f<5");
+  assert(0, 5.0f<5, "5.0f<5");
+  assert(1, 4.9f<5, "4.9f<5");
+  assert(0, 5.1f<=5, "5.1f<=5");
+  assert(1, 5.0f<=5, "5.0f<=5");
+  assert(1, 4.9f<=5, "4.9f<=5");
+
+  assert(1, ({ float x=2e3f; x==2e3; }), "({ float x=2e3f; x==2e3; })");
+  assert(0, ({ float x=2e3f; x==2e5; }), "({ float x=2e3f; x==2e5; })");
+  assert(0, ({ float x=5.1f; x<5; }), "({ float x=5.1f; x<5; })");
+  assert(0, ({ float x=5.0f; x<5; }), "({ float x=5.0f; x<5; })");
+  assert(1, ({ float x=4.9f; x<5; }), "({ float x=4.9f; x<5; })");
+  assert(0, ({ float x=5.1f; x<=5; }), "({ float x=5.1f; x<=5; })");
+  assert(1, ({ float x=5.0f; x<=5; }), "({ float x=5.0f; x<=5; })");
+  assert(1, ({ float x=4.9f; x<=5; }), "({ float x=4.9f; x<=5; })");
+
+  assert(1, ({ double x=2e3f; x==2e3; }), "({ double x=2e3f; x==2e3; })");
+  assert(0, ({ double x=2e3f; x==2e5; }), "({ double x=2e3f; x==2e5; })");
+  assert(0, ({ double x=5.1f; x<5; }), "({ double x=5.1f; x<5; })");
+  assert(0, ({ double x=5.0f; x<5; }), "({ double x=5.0f; x<5; })");
+  assert(1, ({ double x=4.9f; x<5; }), "({ double x=4.9f; x<5; })");
+  assert(0, ({ double x=5.1f; x<=5; }), "({ double x=5.1f; x<=5; })");
+  assert(1, ({ double x=5.0f; x<=5; }), "({ double x=5.0f; x<=5; })");
+  assert(1, ({ double x=4.9f; x<=5; }), "({ double x=4.9f; x<=5; })");
+
+  assert(0, (_Bool)0.0, "(_Bool)0.0");
+  assert(1, (_Bool)0.1, "(_Bool)0.1");
+  assert(3, (char)3.0, "(char)3.0");
+  assert(1000, (short)1000.3, "(short)1000.3");
+  assert(3, (int)3.99, "(int)3.99");
+  assert(2000000000000000, (long)2e15, "(long)2e15");
+  assert(3, (float)3.5, "(float)3.5");
+  assert(5, (double)(float)5.5, "(double)(float)5.5");
+  assert(3, (float)3, "(float)3");
+  assert(3, (double)3, "(double)3");
+  assert(3, (float)3L, "(float)3L");
+  assert(3, (double)3L, "(double)3L");
+
+  assert(4, sizeof(float), "sizeof(float)");
+  assert(8, sizeof(double), "sizeof(double)");
+  assert(8, sizeof(long double), "sizeof(long double)");
+
+  assert(4, sizeof(1f+2), "sizeof(1f+2)");
+  assert(8, sizeof(1.0+2), "sizeof(1.0+2)");
+  assert(4, sizeof(1f-2), "sizeof(1f-2)");
+  assert(8, sizeof(1.0-2), "sizeof(1.0-2)");
+  assert(4, sizeof(1f*2), "sizeof(1f*2)");
+  assert(8, sizeof(1.0*2), "sizeof(1.0*2)");
+  assert(4, sizeof(1f/2), "sizeof(1f/2)");
+  assert(8, sizeof(1.0/2), "sizeof(1.0/2)");
+
+  assert(6, 2.3+3.8, "2.3+3.8");
+  assert(-1, 2.3-3.8, "2.3-3.8");
+  assert(-3, -3.8, "-3.8");
+  assert(13, 3.3*4, "3.3*4");
+  assert(2, 5.0/2, "5.0/2");
+
+  assert(6, 2.3f+3.8f, "2.3f+3.8f");
+  assert(6, 2.3f+3.8, "2.3f+3.8");
+  assert(-1, 2.3f-3.8, "2.3f-3.8");
+  assert(-3, -3.8f, "-3.8f");
+  assert(13, 3.3f*4, "3.3f*4");
+  assert(2, 5.0f/2, "5.0f/2");
+
+  assert(0, !3., "!3.");
+  assert(1, !0., "!0.");
+  assert(0, 0.0 && 0.0, "0.0 && 0.0");
+  assert(0, 0.0 && 0.1, "0.0 && 0.1");
+  assert(0, 0.3 && 0.0, "0.3 && 0.0");
+  assert(1, 0.3 && 0.5, "0.3 && 0.5");
+  assert(0, 0.0 || 0.0, "0.0 || 0.0");
+  assert(1, 0.0 || 0.1, "0.0 || 0.1");
+  assert(1, 0.3 || 0.0, "0.3 || 0.0");
+  assert(1, 0.3 || 0.5, "0.3 || 0.5");
+  assert(5, 0.0 ? 3 : 5, "0.0 ? 3 : 5");
+  assert(3, 1.2 ? 3 : 5, "1.2 ? 3 : 5");
+  assert(5, ({ int x; if (0.0) x=3; else x=5; x; }), "({ int x; if (0.0) x=3; else x=5; x; })");
+  assert(3, ({ int x; if (0.1) x=3; else x=5; x; }), "({ int x; if (0.1) x=3; else x=5; x; })");
+  assert(5, ({ int x=5; if (0.0) x=3; x; }), "({ int x=5; if (0.0) x=3; x; })");
+  assert(3, ({ int x=5; if (0.1) x=3; x; }), "({ int x=5; if (0.1) x=3; x; })");
+  assert(10, ({ double i=10.0; int j=0; for (; i; i--, j++); j; }), "({ double i=10.0; int j=0; for (; i; i--, j++); j; })");
+  assert(10, ({ double i=10.0; int j=0; do j++; while(--i); j; }), "({ double i=10.0; int j=0; do j++; while(--i); j; })");
+
+  assert(6, add_float(2.3, 3.8), "add_float(2.3, 3.8)");
+  assert(6, add_double(2.3, 3.8), "add_double(2.3, 3.8)");
+
+  assert(7, add_float3(2.5, 2.5, 2.5), "add_float3(2.5, 2.5, 2.5)");
+  assert(7, add_double3(2.5, 2.5, 2.5), "add_double3(2.5, 2.5, 2.5)");
+
+  assert(0, ({ char buf[100]; sprintf(buf, "%.1f", (float)3.5); strcmp(buf, "3.5"); }), "({ char buf[100]; sprintf(buf, \"%.1f\", (float)3.5); strcmp(buf, \"3.5\"); })");
+
+  assert(0, ({ char buf[100]; fmt(buf, "%.1f", (float)3.5); strcmp(buf, "3.5"); }), "({ char buf[100]; fmt(buf, \"%.1f\", (float)3.5); strcmp(buf, \"3.5\"); })");
+
+  assert(1, g40==1.5, "g40==1.5");
+  assert(1, g41==11, "g41==11");
 
   printf("OK\n");
   return 0;

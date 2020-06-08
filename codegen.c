@@ -27,6 +27,13 @@ static char *xreg(Type *ty, int idx) {
     return r[idx];
 }
 
+static char *freg(int idx) {
+    static char *r[] = {"xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13"};
+    if (idx < 0 || sizeof(r) / sizeof(*r) <= idx)
+        error("register out of range: %d", idx);
+    return r[idx];
+}
+
 static void gen_expr(Node *node);
 static void gen_stmt(Node *node);
 
@@ -68,6 +75,16 @@ static void load(Type *ty) {
         return;
     }
 
+    if (ty->kind == TY_FLOAT) {
+        printf("  movss %s, [%s]\n", freg(top - 1), reg(top - 1));
+        return;
+    }
+
+    if (ty->kind == TY_DOUBLE) {
+        printf("  movsd %s, [%s]\n", freg(top - 1), reg(top - 1));
+        return;
+    }
+
     char *rs = reg(top - 1);
     char *rd = xreg(ty, top - 1);
     char *insn = ty->is_unsigned ? "movzx" : "movsx";
@@ -98,6 +115,10 @@ static void store(Type *ty) {
             printf("  mov al, [%s+%d]\n", rs, i);
             printf("  mov [%s+%d], al\n", rd, i);
         }
+    } else if (ty->kind == TY_FLOAT) {
+        printf("  movss [%s], %s\n", rd, freg(top - 2));
+    } else if (ty->kind == TY_DOUBLE) {
+        printf("  movsd [%s], %s\n", rd, freg(top - 2));
     } else if (sz == 1) {
         printf("  mov [%s], %sb\n", rd, rs);
     } else if (sz == 2) {
@@ -111,16 +132,62 @@ static void store(Type *ty) {
     top--;
 }
 
+static void cmp_zero(Type *ty) {
+    if (ty->kind == TY_FLOAT) {
+        printf("  xorps xmm0, xmm0\n"); // Perform bitwise logical XOR of packed single-precision floating-point values.
+        printf("  ucomiss %s, xmm0\n", freg(--top)); // Perform unordered comparison of scalar single-precision floating-point values and set flags in EFLAGS register.
+    } else if (ty->kind == TY_DOUBLE) {
+        printf("  xorpd xmm0, xmm0\n"); // Perform bitwise logical XOR of packed double-precision floating-point values.
+        printf("  ucomisd %s, xmm0\n", freg(--top)); // Perform unordered comparison of scalar double-precision floating-point values and set flags in EFLAGS register.
+    } else {
+        printf("  cmp %s, 0\n", reg(--top));
+    }
+}
+
 static void cast(Type *from, Type *to) {
     if (to->kind == TY_VOID)
         return;
     
     char *r = reg(top - 1);
+    char *fr = freg(top - 1);
 
     if (to->kind == TY_BOOL) {
-        printf("  cmp %s, 0\n", r);
-        printf("  setne %sb\n", r);
-        printf("  movzx %s, %sb\n", r, r);
+        cmp_zero(from);
+        printf("  setne %sb\n", reg(top));
+        printf("  movzx %s, %sb\n", reg(top), reg(top));
+        top++;
+        return;
+    }
+
+    if (from->kind == TY_FLOAT) {
+        if (to->kind == TY_FLOAT)
+            return;
+        
+        if (to->kind == TY_DOUBLE)
+            printf("  cvtss2sd %s, %s\n", fr, fr); // Convert scalar single-precision floating-point values to scalar double-precision floating-point values.
+        else
+            printf("  cvttss2si %s, %s\n", r, fr); // Convert with truncation a scalar single-precision floating-point value to a scalar double-word integer.
+        return;
+    }
+
+    if (from->kind == TY_DOUBLE) {
+        if (to->kind == TY_DOUBLE)
+            return;
+
+        if (to->kind == TY_FLOAT)
+            printf("  cvtsd2ss %s, %s\n", fr, fr); // Convert scalar double-precision floating-point values to scalar single-precision floating-point values.
+        else
+            printf("  cvttsd2si %s, %s\n", r, fr); // Convert with truncation scalar double-precision floating-point values to scalar doubleword integers.
+        return;
+    }
+    
+    if (to->kind == TY_FLOAT) {
+        printf("  cvtsi2ss %s, %s\n", fr, r); // Convert (scalar) Doubleword Integer to Scalar Single-Precision Floating-Point Value
+        return;
+    }
+
+    if (to->kind == TY_DOUBLE) {
+        printf("  cvtsi2sd %s, %s\n", fr, r); // Convert (scalar) Doubleword Integer to Scalar Double-Precision Floating-Point Value
         return;
     }
 
@@ -162,14 +229,20 @@ static void divmod(Node *node, char *rd, char *rs, char *r64, char *r32) {
 }
 
 static void builtin_va_start(Node *node) {
-    int n = 0;
-    for (Var *var = current_fn->params; var; var = var->next) 
-        n++;
+    int gp = 0;
+    int fp = 0;
+    for (Var *var = current_fn->params; var; var = var->next) {
+        if (is_flonum(var->ty))
+            fp++;
+        else
+            gp++;
+    }
 
     printf("  mov rax, [rbp-%d]\n", node->args[0]->offset);
-    printf("  mov dword ptr [rax], %d\n", n * 8);
+    printf("  mov dword ptr [rax], %d\n", gp * 8);
+    printf("  mov dword ptr [rax+4], %d\n", 48 + fp * 8);
     printf("  mov [rax+16], rbp\n");
-    printf("  sub qword ptr [rax+16], 80\n");
+    printf("  sub qword ptr [rax+16], 128\n");
     top++;
 }
 
@@ -179,10 +252,22 @@ static void gen_expr(Node *node) {
 
     switch (node->kind) {
     case ND_NUM:
-        if (node->ty->kind == TY_LONG)
+        if (node->ty->kind == TY_FLOAT) {
+            float val = node->fval;
+            printf("  mov rax, %u\n", *(int *)&val); // get 32bit bit pattern of fval
+            printf("  push rax\n");                  // but using union is more better?
+            printf("  movss %s, [rsp]\n", freg(top++));
+            printf("  add rsp, 8\n");
+        } else if (node->ty->kind == TY_DOUBLE) {
+            printf("  movabs rax, %lu\n", *(long *)&node->fval); // get 64bit bit pattern of fval
+            printf("  push rax\n");
+            printf("  movsd %s, [rsp]\n", freg(top++));
+            printf("  add rsp, 8\n");
+        } else if (node->ty->kind == TY_LONG) {
             printf("  movabs %s, %lu\n", reg(top++), node->val);
-        else
+        } else {
             printf("  mov %s, %lu\n", reg(top++), node->val);
+        }
         return;
     case ND_VAR:
     case ND_MEMBER:
@@ -226,7 +311,7 @@ static void gen_expr(Node *node) {
     case ND_COND: {
         int seq = labelseq++;
         gen_expr(node->cond);
-        printf("  cmp %s, 0\n", reg(--top));
+        cmp_zero(node->cond->ty);
         printf("  je  .L.else.%d\n", seq);
         gen_expr(node->then);
         top--;
@@ -238,36 +323,37 @@ static void gen_expr(Node *node) {
     }
     case ND_NOT:
         gen_expr(node->lhs);
-        printf("  cmp %s, 0\n", reg(top - 1));
-        printf("  sete %sb\n", reg(top - 1));
-        printf("  movzx %s, %sb\n", reg(top - 1), reg(top - 1));
+        cmp_zero(node->lhs->ty);
+        printf("  sete %sb\n", reg(top));
+        printf("  movzx %s, %sb\n", reg(top), reg(top));
+        top++;
         return;
     case ND_BITNOT:
         gen_expr(node->lhs);
         printf("  not %s\n", reg(top - 1));
         return;
     case ND_LOGAND: {
-        int seq = labelseq++; // The following comments describe the behavior in the case of a stack machine.
-        gen_expr(node->lhs); // push rax in the gen_expr
-        printf("  cmp %s, 0\n", reg(--top)); // pop rax
-        printf("  je .L.false.%d\n", seq);
-        gen_expr(node->rhs); // push rax in the gen_expr
-        printf("  cmp %s, 0\n", reg(--top)); // pop rax
-        printf("  je .L.false.%d\n", seq);
-        printf("  mov %s, 1\n", reg(top)); // mov rax, 1 (no push/pop)
+        int seq = labelseq++;
+        gen_expr(node->lhs);
+        cmp_zero(node->lhs->ty);
+        printf("  je  .L.false.%d\n", seq);
+        gen_expr(node->rhs);
+        cmp_zero(node->rhs->ty);
+        printf("  je  .L.false.%d\n", seq);
+        printf("  mov %s, 1\n", reg(top));
         printf("  jmp .L.end.%d\n", seq);
         printf(".L.false.%d:\n", seq);
-        printf("  mov %s, 0\n", reg(top++)); // mov rax, 0 (no push/pop)
-        printf(".L.end.%d:\n", seq); // ".L.end.seq:" then "push rax" (rax have the value of the expression)
-        return; // In the end, a one value will be remain in the stack.
+        printf("  mov %s, 0\n", reg(top++));
+        printf(".L.end.%d:\n", seq);
+        return;
     }
     case ND_LOGOR: {
         int seq = labelseq++;
         gen_expr(node->lhs);
-        printf("  cmp %s, 0\n", reg(--top));
+        cmp_zero(node->lhs->ty);
         printf("  jne .L.true.%d\n", seq);
         gen_expr(node->rhs);
-        printf("  cmp %s, 0\n", reg(--top));
+        cmp_zero(node->rhs->ty);
         printf("  jne .L.true.%d\n", seq);
         printf("  mov %s, 0\n", reg(top));
         printf("  jmp .L.end.%d\n", seq);
@@ -284,16 +370,31 @@ static void gen_expr(Node *node) {
         }
 
         // Save caller-saved registers
-        printf("  push r10\n");
-        printf("  push r11\n");
+        printf("  sub rsp, 64\n");
+        printf("  mov [rsp], r10\n");
+        printf("  mov [rsp+8], r11\n");
+        printf("  movsd [rsp+16], xmm8\n");
+        printf("  movsd [rsp+24], xmm9\n");
+        printf("  movsd [rsp+32], xmm10\n");
+        printf("  movsd [rsp+40], xmm11\n");
+        printf("  movsd [rsp+48], xmm12\n");
+        printf("  movsd [rsp+56], xmm13\n");
 
-        gen_expr(node->lhs);
+        gen_expr(node->lhs); // Load the fanction name to the register-machine
 
         // Load arguments from the stack.
+        int gp = 0, fp = 0;
         for (int i = 0; i < node->nargs; i++) {
             Var *arg = node->args[i];
             char *insn = arg->ty->is_unsigned ? "movzx" : "movsx";
             int sz = size_of(arg->ty);
+
+            if (is_flonum(arg->ty)) {
+                if (arg->ty->kind == TY_FLOAT)
+                    printf("  movss xmm%d, [rbp-%d]\n", fp++, arg->offset);
+                else
+                    printf("  movsd xmm%d, [rbp-%d]\n", fp++, arg->offset);
+            }
             
             if (sz == 1)
                 printf("  %s %s, byte ptr [rbp-%d]\n", insn, argreg32[i], arg->offset);
@@ -305,22 +406,37 @@ static void gen_expr(Node *node) {
                 printf("  mov %s, [rbp-%d]\n", argreg64[i], arg->offset);
         }
 
-        printf("  mov rax, 0\n");
+        // Call a function
+        printf("  mov rax, %d\n", fp);
         printf("  call %s\n", reg(--top));
 
         // The System V x86-64 ABI has a special rule regarding a boolean
         // return value that only the lower 8 bits are valid for it and
-        // the upper 56 bit may contain garbage. Here, we clear the upper
+        // the upper 56 bits may contain garbage. Here, we clear the upper
         // 56 bits.
         if (node->ty->kind == TY_BOOL)
             printf("  movzx eax, al\n");
 
-        printf("  pop r11\n");
-        printf("  pop r10\n");
-        printf("  mov %s, rax\n", reg(top++));
+        // Restore caller-saved registers
+        printf("  mov r10, [rsp]\n");
+        printf("  mov r11, [rsp+8]\n");
+        printf("  movsd xmm8, [rsp+16]\n");
+        printf("  movsd xmm9, [rsp+24]\n");
+        printf("  movsd xmm10, [rsp+32]\n");
+        printf("  movsd xmm11, [rsp+40]\n");
+        printf("  movsd xmm12, [rsp+48]\n");
+        printf("  movsd xmm13, [rsp+56]\n");
+        printf("  add rsp, 64\n");
+        // Store the return value
+        if (node->ty->kind == TY_FLOAT)
+            printf("  movss %s, xmm0\n", freg(top++));
+        else if (node->ty->kind == TY_DOUBLE)
+            printf("  movsd %s, xmm0\n", freg(top++));
+        else
+            printf("  mov %s, rax\n", reg(top++));
         return;
-    }
-    }
+    } // ND_FANCALL
+    } // switch
 
     // Binary expressions
     gen_expr(node->lhs);
@@ -328,20 +444,42 @@ static void gen_expr(Node *node) {
 
     char *rd = xreg(node->lhs->ty, top - 2);
     char *rs = xreg(node->lhs->ty, top - 1);
+    char *fd = freg(top - 2);
+    char *fs = freg(top - 1);
     top--;
 
     switch (node->kind) {
     case ND_ADD:
-        printf("  add %s, %s\n", rd, rs);
+        if (node->ty->kind == TY_FLOAT)
+            printf("  addss %s, %s\n", fd, fs);
+        else if (node->ty->kind == TY_DOUBLE)
+            printf("  addsd %s, %s\n", fd, fs);
+        else
+            printf("  add %s, %s\n", rd, rs);
         return;
     case ND_SUB:
-        printf("  sub %s, %s\n", rd, rs);
+        if (node->ty->kind == TY_FLOAT)
+            printf("  subss %s, %s\n", fd, fs);
+        else if (node->ty->kind == TY_DOUBLE)
+            printf("  subsd %s, %s\n", fd, fs);
+        else
+            printf("  sub %s, %s\n", rd, rs);
         return;
     case ND_MUL:
-        printf("  imul %s, %s\n", rd, rs);
+        if (node->ty->kind == TY_FLOAT)
+            printf("  mulss %s, %s\n", fd, fs);
+        else if (node->ty->kind == TY_DOUBLE)
+            printf("  mulsd %s, %s\n", fd, fs);
+        else
+            printf("  imul %s, %s\n", rd, rs);
         return;
     case ND_DIV:
-        divmod(node, rd, rs, "rax", "eax");
+        if (node->ty->kind == TY_FLOAT)
+            printf("  divss %s, %s\n", fd, fs);
+        else if (node->ty->kind == TY_DOUBLE)
+            printf("  divsd %s, %s\n", fd, fs);
+        else
+            divmod(node, rd, rs, "rax", "eax");
         return;
     case ND_MOD:
         divmod(node, rd, rs, "rdx", "edx");
@@ -356,29 +494,55 @@ static void gen_expr(Node *node) {
         printf("  xor %s, %s\n", rd, rs);
         return;
     case ND_EQ:
-        printf("  cmp %s, %s\n", rd, rs);
+        if (node->lhs->ty->kind == TY_FLOAT)
+            printf("  ucomiss %s, %s\n", fd, fs);
+        else if (node->lhs->ty->kind == TY_DOUBLE)
+            printf("  ucomisd %s, %s\n", fd, fs);
+        else
+            printf("  cmp %s, %s\n", rd, rs);
         printf("  sete al\n");
         printf("  movzx %s, al\n", rd);
         return;
     case ND_NE:
-        printf("  cmp %s, %s\n", rd, rs);
+        if (node->lhs->ty->kind == TY_FLOAT)
+            printf("  ucomiss %s, %s\n", fd, fs);
+        else if (node->lhs->ty->kind == TY_DOUBLE)
+            printf("  ucomisd %s, %s\n", fd, fs);
+        else
+            printf("  cmp %s, %s\n", rd, rs);
         printf("  setne al\n");
         printf("  movzx %s, al\n", rd);
         return;
     case ND_LT:
-        printf("  cmp %s, %s\n", rd, rs);
-        if (node->lhs->ty->is_unsigned)
+        if (node->lhs->ty->kind == TY_FLOAT) {
+            printf("  ucomiss %s, %s\n", fd, fs);
             printf("  setb al\n");
-        else
-            printf("  setl al\n");
+        } else if (node->lhs->ty->kind == TY_DOUBLE) {
+            printf("  ucomisd %s, %s\n", fd, fs);
+            printf("  setb al\n");
+        } else {
+            printf("  cmp %s, %s\n", rd, rs);
+            if (node->lhs->ty->is_unsigned)
+                printf("  setb al\n"); // Set byte if below.
+            else
+                printf("  setl al\n"); // Set byte if less.
+        }
         printf("  movzx %s, al\n", rd);
         return;
     case ND_LE:
-        printf("  cmp %s, %s\n", rd, rs);
-        if (node->lhs->ty->is_unsigned)
+        if (node->lhs->ty->kind == TY_FLOAT) {
+            printf("  ucomiss %s, %s\n", fd, fs);
             printf("  setbe al\n");
-        else
-            printf("  setle al\n");
+        } else if (node->lhs->ty->kind == TY_DOUBLE) {
+            printf("  ucomisd %s, %s\n", fd, fs);
+            printf("  setbe al\n");
+        } else {
+            printf("  cmp %s, %s\n", rd, rs);
+            if (node->lhs->ty->is_unsigned)
+                printf("  setbe al\n"); // Set byte if below or equal.
+            else
+                printf("  setle al\n");
+        }
         printf("  movzx %s, al\n", rd);
         return;
     case ND_SHL:
@@ -405,7 +569,7 @@ static void gen_stmt(Node *node) {
         int seq = labelseq++;
         if (node->els) {
             gen_expr(node->cond);
-            printf("  cmp %s, 0\n", reg(--top));
+            cmp_zero(node->cond->ty);
             printf("  je  .L.else.%d\n", seq);
             gen_stmt(node->then);
             printf("  jmp .L.end.%d\n", seq);
@@ -414,7 +578,7 @@ static void gen_stmt(Node *node) {
             printf(".L.end.%d:\n", seq);
         } else {
             gen_expr(node->cond);
-            printf("  cmp %s, 0\n", reg(--top));
+            cmp_zero(node->cond->ty);
             printf("  je  .L.end.%d\n", seq);
             gen_stmt(node->then);
             printf(".L.end.%d:\n", seq);
@@ -432,7 +596,7 @@ static void gen_stmt(Node *node) {
         printf(".L.begin.%d:\n", seq);
         if (node->cond) {
             gen_expr(node->cond);
-            printf("  cmp %s, 0\n", reg(--top));
+            cmp_zero(node->cond->ty);
             printf("  je  .L.break.%d\n", seq);
         }
         gen_stmt(node->then);
@@ -456,8 +620,8 @@ static void gen_stmt(Node *node) {
         gen_stmt(node->then);
         printf(".L.continue.%d:\n", seq);
         gen_expr(node->cond);
-        printf("  cmp %s, 0\n", reg(--top));
-        printf("  jne  .L.begin.%d\n", seq);
+        cmp_zero(node->cond->ty);
+        printf("  jne .L.begin.%d\n", seq);
         printf(".L.break.%d:\n", seq);
 
         brkseq = brk;
@@ -522,7 +686,10 @@ static void gen_stmt(Node *node) {
     case ND_RETURN:
         if (node->lhs) {
             gen_expr(node->lhs);
-            printf("  mov rax, %s\n", reg(--top));
+            if (is_flonum(node->lhs->ty))
+                printf("  movsd xmm0, %s\n", freg(--top));
+            else
+                printf("  mov rax, %s\n", reg(--top));
         }
         printf("  jmp .L.return.%s\n", current_fn->name);
         return;
@@ -607,22 +774,38 @@ static void emit_text(Program *prog) {
 
         // Save arg registers if function is variadic
         if (fn->is_variadic) {
-            printf("  mov [rbp-80], rdi\n");
-            printf("  mov [rbp-72], rsi\n");
-            printf("  mov [rbp-64], rdx\n");
-            printf("  mov [rbp-56], rcx\n");
-            printf("  mov [rbp-48], r8\n");
-            printf("  mov [rbp-40], r9\n");
+            printf("  mov [rbp-128], rdi\n");
+            printf("  mov [rbp-120], rsi\n");
+            printf("  mov [rbp-112], rdx\n");
+            printf("  mov [rbp-104], rcx\n");
+            printf("  mov [rbp-96], r8\n");
+            printf("  mov [rbp-88], r9\n");
+            printf("  movsd [rbp-80], xmm0\n");
+            printf("  movsd [rbp-72], xmm1\n");
+            printf("  movsd [rbp-64], xmm2\n");
+            printf("  movsd [rbp-56], xmm3\n");
+            printf("  movsd [rbp-48], xmm4\n");
+            printf("  movsd [rbp-40], xmm5\n");
         }
         
         // Push arguments to the stack
-        int i = 0;
-        for (Var *var = fn->params; var; var = var->next)
-            i++;
+        int gp = 0, fp = 0;
+        for (Var *var = fn->params; var; var = var->next) {
+            if (is_flonum(var->ty))
+                fp++;
+            else
+                gp++;
+        }
 
         for (Var *var = fn->params; var; var = var->next) {
-            char *r = get_argreg(size_of(var->ty), --i);
-            printf("  mov [rbp-%d], %s\n", var->offset, r);
+            if (var->ty->kind == TY_FLOAT) {
+                printf("  movss [rbp-%d], xmm%d\n", var->offset, --fp);
+            } else if (var->ty->kind == TY_DOUBLE) {
+                printf("  movsd [rbp-%d], xmm%d\n", var->offset, --fp);
+            } else {
+                char *r = get_argreg(size_of(var->ty), --gp);
+                printf("  mov [rbp-%d], %s\n", var->offset, r);
+            }
         }
 
         // Emit code

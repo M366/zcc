@@ -123,6 +123,7 @@ static long eval2(Node *node, Var **var);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
 static long const_expr(Token **rest, Token *tok);
+static double eval_double(Node *node);
 static Node *conditional(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
@@ -371,9 +372,11 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
         SHORT    = 1 << 6,
         INT      = 1 << 8,
         LONG     = 1 << 10,
-        OTHER    = 1 << 12,
-        SIGNED   = 1 << 13,
-        UNSIGNED = 1 << 14,
+        FLOAT    = 1 << 12,
+        DOUBLE   = 1 << 14,
+        OTHER    = 1 << 16,
+        SIGNED   = 1 << 17,
+        UNSIGNED = 1 << 18,
     };
 
     Type *ty = ty_int;
@@ -454,6 +457,10 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
             counter += INT;
         else if (equal(tok, "long"))
             counter += LONG;
+        else if (equal(tok, "float"))
+            counter += FLOAT;
+        else if (equal(tok, "double"))
+            counter += DOUBLE;
         else if (equal(tok, "signed"))
             counter |= SIGNED;
         else if (equal(tok, "unsigned"))
@@ -509,6 +516,13 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
         case UNSIGNED + LONG + LONG:
         case UNSIGNED + LONG + LONG + INT:
             ty = ty_ulong;
+            break;
+        case FLOAT:
+            ty = ty_float;
+            break;
+        case DOUBLE:
+        case LONG + DOUBLE:
+            ty = ty_double;
             break;
         default:
             error_tok(tok, "invalid type");
@@ -1007,6 +1021,16 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
         return cur;
     }
 
+    if (ty->kind == TY_FLOAT) {
+        *(float *)(buf + offset) = eval_double(init->expr);
+        return cur;
+    }
+
+    if (ty->kind == TY_DOUBLE) {
+        *(double *)(buf + offset) = eval_double(init->expr);
+        return cur;
+    }
+
     Var *var = NULL;
     long val = eval2(init->expr, &var);
 
@@ -1040,9 +1064,9 @@ static void gvar_initializer(Token **rest, Token *tok, Var *var) {
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
     static char *kw[] = {
-        "void", "_Bool", "char", "short", "int", "long", "struct", "union",
-        "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
-        "const", "volatile",
+        "void", "_Bool", "char", "short", "int", "long", "float", "double",
+        "struct", "union", "typedef", "enum", "static", "extern", "_Alignas",
+        "signed", "unsigned", "const", "volatile",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -1269,6 +1293,9 @@ static long eval(Node *node) {
 static long eval2(Node *node, Var **var) {
     add_type(node);
 
+    if (is_flonum(node->ty))
+        return eval_double(node);
+
     switch (node->kind) {
     case ND_ADD:
         return eval2(node->lhs, var) + eval(node->rhs);
@@ -1357,6 +1384,39 @@ static long eval2(Node *node, Var **var) {
 static long const_expr(Token **rest, Token *tok) {
     Node *node = conditional(rest, tok);
     return eval(node);
+}
+
+static double eval_double(Node *node) {
+    add_type(node);
+
+    if (is_integer(node->ty)) {
+        if (node->ty->is_unsigned)
+            return (unsigned long)eval(node);
+        return eval(node);
+    }
+
+    switch (node->kind) {
+    case ND_ADD:
+        return eval_double(node->lhs) + eval_double(node->rhs);
+    case ND_SUB:
+        return eval_double(node->lhs) - eval_double(node->rhs);
+    case ND_MUL:
+        return eval_double(node->lhs) * eval_double(node->rhs);
+    case ND_DIV:
+        return eval_double(node->lhs) / eval_double(node->rhs);
+    case ND_COND:
+        return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
+    case ND_COMMA:
+        return eval_double(node->rhs);
+    case ND_CAST:
+        if (is_flonum(node->lhs->ty))
+            return eval_double(node->lhs);
+        return eval(node->lhs);
+    case ND_NUM:
+        return node->fval;
+    }
+
+    error_tok(node->tok, "not a constant expression");
 }
 
 // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
@@ -1584,7 +1644,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
     add_type(rhs);
 
     // num + num
-    if (is_integer(lhs->ty) && is_integer(rhs->ty))
+    if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
         return new_binary(ND_ADD, lhs, rhs, tok);
 
     if (lhs->ty->base && rhs->ty->base)
@@ -1608,7 +1668,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
     add_type(rhs);
 
     // num - num
-    if (is_integer(lhs->ty) && is_integer(rhs->ty))
+    if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
         return new_binary(ND_SUB, lhs, rhs, tok);
 
     // ptr - num
@@ -1969,6 +2029,8 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
         if (param_ty) {
             arg = new_cast(arg, param_ty);
             param_ty = param_ty->next;
+        } else if (arg->ty->kind == TY_FLOAT) {
+            arg =new_cast(arg, ty_double);
         }
 
         Var *var = arg->ty->base
@@ -2073,7 +2135,15 @@ static Node *primary(Token **rest, Token *tok) {
     if (tok->kind != TK_NUM)
         error_tok(tok, "expected expression");
 
-    Node *node = new_num(tok->val, tok);
+    Node *node;
+
+    if (is_flonum(tok->ty)) {
+        node = new_node(ND_NUM, tok);
+        node->fval = tok->fval;
+    } else {
+        node = new_num(tok->val, tok);
+    }
+
     node->ty = tok->ty;
     *rest = tok->next;
     return node;
