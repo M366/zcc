@@ -73,5 +73,6 @@ zcc type.c
 zcc parse.c
 zcc codegen.c
 zcc tokenize.c
+zcc preprocess.c
 
 (cd $TMP; gcc -static -o ../$OUTPUT *.o)
