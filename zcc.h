@@ -10,6 +10,7 @@
 #include <strings.h>
 
 typedef struct Type Type;
+typedef struct Hideset Hideset;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
 
@@ -29,22 +30,23 @@ typedef enum {
 // Token type
 typedef struct Token Token;
 struct Token {
-    TokenKind kind; // Token kind
-    Token *next;    // Next token
-    long val;       // If kind is TK_NUM, its value
-    double fval;    // If kind is TK_NUM, its value
-    Type *ty;       // Used if TK_NUM
-    char *loc;      // Token location
-    int len;        // Token length
+    TokenKind kind;   // Token kind
+    Token *next;      // Next token
+    long val;         // If kind is TK_NUM, its value
+    double fval;      // If kind is TK_NUM, its value
+    Type *ty;         // Used if TK_NUM
+    char *loc;        // Token location
+    int len;          // Token length
 
-    char *contents; // String literal contents including terminating '\0'
-    char cont_len;  // string literal length
+    char *contents;   // String literal contents including terminating '\0'
+    char cont_len;    // string literal length
 
-    char *filename; // Input filename
-    char *input;    // Entire input string
-    int line_no;    // Line number
-    int file_no;    // File number for .loc directive
-    bool at_bol;    // True if this token is at beginning of line
+    char *filename;   // Input filename
+    char *input;      // Entire input string
+    int line_no;      // Line number
+    int file_no;      // File number for .loc directive
+    bool at_bol;      // True if this token is at beginning of line
+    Hideset *hideset; // For macro expansion
 };
 
 void error(char *fmt, ...);
