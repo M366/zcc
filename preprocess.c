@@ -1,10 +1,12 @@
 #include "zcc.h"
 
 // `#if` can be nested, so we use a stack to manage nested `#if`s
-typedef struct CondIncl CondIncl; // condition incliment
+typedef struct CondIncl CondIncl; // condition included
 struct CondIncl {
     CondIncl *next;
+    enum { IN_THEN, IN_ELSE } ctx;
     Token *tok;
+    bool included;
 };
 
 static CondIncl *cond_incl;
@@ -52,16 +54,30 @@ static Token *append(Token *tok1, Token *tok2) {
     return head.next;
 }
 
-// Skip until next `#endif`
+static Token *skip_cond_incl2(Token *tok) {
+    while (tok->kind != TK_EOF) {
+        if (is_hash(tok) && equal(tok->next, "if")) {
+            tok = skip_cond_incl2(tok->next->next);
+            continue;
+        }
+        if (is_hash(tok) && equal(tok->next, "endif"))
+            return tok->next->next;
+        tok = tok->next;
+    }
+    return tok;
+}
+
+// Skip until next `#else` or `#endif`.
 // Nested `#if` and `#endif` are skipped.
 static Token *skip_cond_incl(Token *tok) {
     while (tok->kind != TK_EOF) {
         if (is_hash(tok) && equal(tok->next, "if")) {
-            tok = skip_cond_incl(tok->next->next);
-            tok = tok->next;
+            tok = skip_cond_incl2(tok->next->next);
             continue;
         }
-        if (is_hash(tok) && equal(tok->next, "endif"))
+
+        if (is_hash(tok) &&
+            (equal(tok->next, "else") || equal(tok->next, "endif")))
             break;
         tok = tok->next;
     }
@@ -93,10 +109,12 @@ static long eval_const_expr(Token **rest, Token *tok) {
     return val;
 }
 
-static CondIncl *push_cond_incl(Token *tok) {
+static CondIncl *push_cond_incl(Token *tok, bool included) {
     CondIncl *ci = calloc(1, sizeof(CondIncl));
     ci->next = cond_incl;
+    ci->ctx = IN_THEN;
     ci->tok = tok;
+    ci->included = included;
     cond_incl = ci;
     return ci;
 }
@@ -105,7 +123,7 @@ static CondIncl *push_cond_incl(Token *tok) {
 // macros and directives.
 static Token *preprocess2(Token *tok) {
     Token head = {};
-    Token *cur = &head;
+    Token *cur = &head; // `cur` is preprocessed token. `tok` is raw token.
 
     while (tok->kind != TK_EOF) {
         // Pass through if it is not a "#"
@@ -135,8 +153,19 @@ static Token *preprocess2(Token *tok) {
 
         if (equal(tok, "if")) {
             long val = eval_const_expr(&tok, tok->next);
-            push_cond_incl(start);
+            push_cond_incl(start, val);
             if (!val)
+                tok = skip_cond_incl(tok);
+            continue;
+        }
+
+        if (equal(tok, "else")) {
+            if (!cond_incl || cond_incl->ctx == IN_ELSE)
+                error_tok(start, "stray #else");
+            cond_incl->ctx = IN_ELSE;
+            tok = skip_line(tok->next);
+
+            if (cond_incl->included)
                 tok = skip_cond_incl(tok);
             continue;
         }
