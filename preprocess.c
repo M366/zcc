@@ -190,6 +190,33 @@ static Token *skip_cond_incl(Token *tok) {
     return tok;
 }
 
+// Double-quote a given string and returns it.
+static char *quote_string(char *str) {
+    int bufsize = 3; // '"', '"', '\0'
+    for (int i = 0; str[i]; i++) {
+        if (str[i] == '\\' || str[i] == '"')
+            bufsize++;
+        bufsize++;
+    }
+
+    char *buf = malloc(bufsize);
+    char *p = buf;
+    *p++ = '"';
+    for (int i = 0; str[i]; i++) {
+        if (str[i] == '\\' || str[i] == '"')
+            *p++ = '\\';
+        *p++ = str[i];
+    }
+    *p++ = '"';
+    *p++ = '\0';
+    return buf;
+}
+
+static Token *new_str_token(char *str, Token *tmpl) { // tmpl: template
+    char *buf = quote_string(str);
+    return tokenize(tmpl->filename, tmpl->file_no, buf);
+}
+
 // Copy all tokens until the next newline, terminate them with
 // an EOF token and then returns them. This function is used to
 // create a new list of tokens for `#if` arguments.
@@ -341,6 +368,40 @@ static Token *find_arg(MacroArg *args, Token *tok) {
     return NULL;
 }
 
+// Concatenates all tokens in `tok` and returns a new string.
+static char *join_tokens(Token *tok) {
+    // Compute the length of the resulting token.
+    int len = 1;
+    for (Token *t = tok; t; t = t->next) {
+        if (t != tok && t->has_space)
+            len++;
+        len += t->len;
+    }
+
+    char *buf = malloc(len);
+
+    // Copy token texts.
+    int pos = 0;
+    for (Token *t = tok; t; t = t->next) {
+        if (t != tok && t->has_space)
+            buf[pos++] = ' ';
+        strncpy(buf + pos, t->loc, t->len);
+        pos += t->len;
+    }
+    buf[pos] = '\0';
+    return buf;
+}
+
+// Concatenates all token in `arg` and returns a new string token.
+// This function is used for the stringizing operator (#).
+static Token *stringize(Token *hash, Token *arg) {
+    // Create a new string token. We need to set some value to its
+    // source location for error reporting function, so we use a macro
+    // name token as a template.
+    char *s = join_tokens(arg);
+    return new_str_token(s, hash);
+}
+
 // Replace func-like macro parameters with given arguments.
 static Token *subst(Token *tok, MacroArg *args) { // subst: substitute
     Token head = {};
@@ -349,19 +410,30 @@ static Token *subst(Token *tok, MacroArg *args) { // subst: substitute
     while (tok->kind != TK_EOF) {
         Token *arg = find_arg(args, tok);
 
-        if (!arg) {
-            cur = cur->next = copy_token(tok);
+        // If the current token is a macro parameter, replaces
+        // it with actuals.
+        if (arg) {
             tok = tok->next;
+            if (arg != EMPTY)
+                for (Token *t = arg; t; t = t->next)
+                    cur = cur->next = copy_token(t);
             continue;
         }
 
+        // "#" followed by a parameter is replaced with stringized actuals.
+        if (equal(tok, "#")) {
+            Token *arg = find_arg(args, tok->next);
+            if (arg) {
+                cur = cur->next = stringize(tok, arg);
+                tok = tok->next->next;
+                continue;
+            }
+        }
+
+        // Handle non-macro token.
+        cur = cur->next = copy_token(tok);
         tok = tok->next;
-
-        if (arg == EMPTY)
-            continue;
-
-        for (Token *t = arg; t; t = t->next)
-            cur = cur->next = copy_token(t);
+        continue;
     }
 
     return head.next;

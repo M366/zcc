@@ -375,7 +375,7 @@ static void add_line_info(Token *tok) {
 }
 
 // Tokenize a given string and returns new tokens.
-static Token *tokenize(char *filename, int file_no, char *p) {
+Token *tokenize(char *filename, int file_no, char *p) {
     current_filename = filename;
     current_input = p;
     Token head = {};
