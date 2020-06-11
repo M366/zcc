@@ -18,12 +18,12 @@ zcc-stage3: zcc-stage2
 	./self.sh tmp-stage3 ./zcc-stage2 zcc-stage3
 
 test: zcc tests/extern.o $(TMPFS)
-	(cd tests; ../zcc tests.c) > $(TMPFS)/tmp.s
+	(cd tests; ../zcc -I. tests.c) > $(TMPFS)/tmp.s
 	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s tests/extern.o
 	$(TMPFS)/tmp
 
 test-stage2: zcc-stage2 tests/extern.o
-	(cd tests; ../zcc-stage2 tests.c) > $(TMPFS)/tmp.s
+	(cd tests; ../zcc-stage2 -I. tests.c) > $(TMPFS)/tmp.s
 	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s tests/extern.o
 	$(TMPFS)/tmp
 
