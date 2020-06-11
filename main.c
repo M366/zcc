@@ -1,11 +1,61 @@
 #include "zcc.h"
 
+bool opt_E;
+static char *input_file;
+
+static void usage(void) {
+    fprintf(stderr, "zcc [ -I<path> ] <file>\n");
+    exit(1);
+}
+
+static void parse_args(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--help"))
+            usage();
+
+        if (!strcmp(argv[i], "-E")) {
+            opt_E = true;
+            continue;
+        }
+
+        if (argv[i][0] == '-' && argv[i][1] != '\0')
+            error("unknown argument: %s", argv[i]);
+
+        input_file = argv[i];
+    }
+
+    if (!input_file)
+        error("no input files");
+}
+
+static void print_tokens(Token *tok) {
+    int line = 1;
+    for (; tok->kind != TK_EOF; tok = tok->next) {
+        if (line > 1 && tok->at_bol)
+            printf("\n");
+        if (tok->has_space && !tok->at_bol)
+            printf(" ");
+        printf(" %.*s", tok->len, tok->loc);
+        line++;
+    }
+    printf("\n");
+}
+
 int main(int argc, char **argv) {
-    if (argc != 2)
-        error("%s: invalid number of arguments", argv[0]);
-    
+    parse_args(argc, argv);
+
     // Tokenize and parse.
-    Token *tok = tokenize_file(argv[1]);
+    Token *tok = tokenize_file(input_file);
+    if (!tok)
+        error("%s: %s", input_file, strerror(errno));
+
+    tok = preprocess(tok);
+
+    if (opt_E) {
+        print_tokens(tok);
+        exit(0);
+    }
+
     Program *prog = parse(tok);
 
     // Assign offsets to local variables. The last declared lvar become the first lvar in the stack.
@@ -21,9 +71,6 @@ int main(int argc, char **argv) {
         }
         fn->stack_size = align_to(offset, 16);
     }
-
-    // Emit a .file directive for the assembler.
-    printf(".file 1 \"%s\"\n", argv[1]);
 
     // Traverse the AST to emit assembly.
     codegen(prog);

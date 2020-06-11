@@ -5,6 +5,8 @@
  * This is a block comment.
  */
 
+#include "include1.h"
+
 int printf();
 int exit();
 int strcmp(char *p, char *q);
@@ -22,7 +24,7 @@ int g5 = 5;
 long g6 = 6;
 int g9[3] = {0, 1, 2};
 struct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};
-struct {int a[2];} g12[2] ={{{1, 2}}};
+struct {int a[2];} g12[2] = {{{1, 2}}};
 char g17[] = "foobar";
 char g18[10] = "foobar";
 char g19[3] = "foobar";
@@ -156,6 +158,7 @@ typedef struct {
   void *reg_save_area;
 } va_list[1];
 
+
 int add_all1(int x, ...);
 int add_all3(int z, int b, int c, ...);
 
@@ -179,6 +182,8 @@ double add_double3(double x, double y, double z) {
 float add_float3(float x, float y, float z) {
   return x + y + z;
 }
+
+int M9(int x) { return x*x; }
 
 int main() {
   assert(0, 0, "0");
@@ -390,7 +395,7 @@ int main() {
   assert(3, ({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; }), "({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; })");
   assert(3, ({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; }), "({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; })");
 
-  assert(8, ({ union { int a; char b[6]; } x; sizeof(x);}), "({ union { int a; char b[6]; } x; sizeof(x);})");
+  assert(8, ({ union { int a; char b[6]; } x; sizeof(x); }), "({ union { int a; char b[6]; } x; sizeof(x); })");
   assert(3, ({ union { int a; char b[4]; } x; x.a = 515; x.b[0]; }), "({ union { int a; char b[4]; } x; x.a = 515; x.b[0]; })");
   assert(2, ({ union { int a; char b[4]; } x; x.a = 515; x.b[1]; }), "({ union { int a; char b[4]; } x; x.a = 515; x.b[1]; })");
   assert(0, ({ union { int a; char b[4]; } x; x.a = 515; x.b[2]; }), "({ union { int a; char b[4]; } x; x.a = 515; x.b[2]; })");
@@ -434,7 +439,7 @@ int main() {
   assert(1, ({ typedef struct {int a;} t; t x; x.a=1; x.a; }), "({ typedef struct {int a;} t; t x; x.a=1; x.a; })");
   assert(1, ({ typedef int t; t t=1; t; }), "({ typedef int t; t t=1; t; })");
   assert(2, ({ typedef struct {int a;} t; { typedef int t; } t x; x.a=2; x.a; }), "({ typedef struct {int a;} t; { typedef int t; } t x; x.a=2; x.a; })");
-  assert(4, ({ typedef int t; t x; sizeof(x); }), "({ typedef int t; t x; sizeof(x); })");
+  assert(4, ({ typedef t; t x; sizeof(x); }), "({ typedef t; t x; sizeof(x); })");
   assert(4, ({ typedef typedef t; t x; sizeof(x); }), "({ typedef typedef t; t x; sizeof(x); })");
   assert(3, ({ MyInt x=3; x; }), "({ MyInt x=3; x; })");
   assert(16, ({ MyInt2 x; sizeof(x); }), "({ MyInt2 x; sizeof(x); })");
@@ -744,7 +749,6 @@ int main() {
   assert('d', ({ char x[2][4]={"abc","def"}; x[1][0]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[1][0]; })");
   assert('f', ({ char x[2][4]={"abc","def"}; x[1][2]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[1][2]; })");
 
-
   assert(4, ({ int x[]={1,2,3,4}; x[3]; }), "({ int x[]={1,2,3,4}; x[3]; })");
   assert(16, ({ int x[]={1,2,3,4}; sizeof(x); }), "({ int x[]={1,2,3,4}; sizeof(x); })");
   assert(4, ({ char x[]="foo"; sizeof(x); }), "({ char x[]=\"foo\"; sizeof(x); })");
@@ -828,7 +832,6 @@ int main() {
   assert(0, strcmp(g33[0], "foo"), "strcmp(g33[0], \"foo\")");
   assert(0, strcmp(g33[1], "bar"), "strcmp(g33[1], \"bar\")");
   assert(0, strcmp(g34, "foo"), "strcmp(g34, \"foo\")");
-
 
   assert(3, ({ int a[]={1,2,3,}; a[2]; }), "({ int a[]={1,2,3,}; a[2]; })");
   assert(1, ({ struct {int a,b,c;} x={1,2,3,}; x.a; }), "({ struct {int a,b,c;} x={1,2,3,}; x.a; })");
@@ -1191,6 +1194,210 @@ int main() {
 
   assert(1, g40==1.5, "g40==1.5");
   assert(1, g41==11, "g41==11");
+  
+#
+
+  assert(5, include1, "include1");
+  assert(7, include2, "include2");
+
+#if 0
+#include "/no/such/file"
+  assert(0, 1, "1");
+# if nested
+# endif
+#endif
+
+  assert(3, 1
+#if 1
+    + 2
+#endif
+    , "1+2");
+
+  assert(3, 1
+#if 1
+# if 0
+#  if 1
+    foo bar
+#  endif
+# endif
+    + 2
+#endif
+    , "1+2");
+
+  assert(3,
+#if 1-1
+# if 1
+# endif
+# if 1
+# else
+# endif
+# if 0
+# else
+# endif
+         2,
+#else
+# if 1
+         3,
+# endif
+#endif
+         "3");
+
+  assert(2,
+#if 1
+         2,
+#else
+         3,
+#endif
+         "2");
+
+  assert(3,
+#if 0
+    1,
+#elif 0
+    2,
+#elif 3+5
+    3,
+#elif 1*5
+    4,
+#endif
+    "3");
+
+  assert(1,
+#if 1+5
+    1,
+#elif 1
+    2,
+#elif 3
+    2,
+#endif
+    "1");
+
+  int M1 = 5;
+
+#define M1 3
+  assert(3, M1, "M1");
+#define M1 4
+  assert(4, M1, "M1");
+#undef M1
+  assert(5, M1, "M1");
+
+#define M1 3+4+
+  assert(12, M1 5, "M1 5");
+
+#define M1 3+4
+  assert(23, M1*5, "M1*5");
+
+#define ASSERT assert(
+#define if 5
+#define five "5"
+#define END )
+  ASSERT 5, if, five END;
+#undef ASSERT
+#undef if
+#undef five
+#undef END
+
+#define M 5
+  assert(5,
+#if M
+         5,
+#else
+         6,
+#endif
+         "5");
+
+#define M 5
+  assert(5,
+#if M-5
+         6,
+#elif M
+         5,
+#endif
+         "5");
+
+  int M2 = 6;
+#define M2 M2 + 3
+  assert(9, M2, "M2");
+
+#define M3 M2 + 3
+  assert(12, M3, "M3");
+
+  int M4 = 3;
+#define M4 M5 * 5
+#define M5 M4 + 2
+  assert(13, M4, "M4");
+
+  assert(3,
+#ifdef M6
+         5,
+#else
+         3,
+#endif
+         "3");
+
+#define M6
+  assert(5,
+#ifdef M6
+         5,
+#else
+         3,
+#endif
+         "5");
+
+  assert(3,
+#ifndef M7
+         3,
+#else
+         5,
+#endif
+         "3");
+
+#define M7
+  assert(5,
+#ifndef M7
+         3,
+#else
+         5,
+#endif
+         "5");
+
+#if 0
+#ifdef NO_SUCH_MACRO
+#endif
+#ifndef NO_SUCH_MACRO
+#endif
+#else
+#endif
+
+#define M7() 1
+  int M7 = 5;
+  assert(1, M7(), "M7()");
+  assert(5, M7, "M7");
+
+#define M7 ()
+  assert(3, ret3 M7, "ret3 M7");
+
+#define M8(x,y) x+y
+  assert(7, M8(3, 4), "M8(3, 4)");
+
+#define M8(x,y) x*y
+  assert(24, M8(3+4, 4+5), "M8(3+4, 4+5)");
+
+#define M8(x,y) (x)*(y)
+  assert(63, M8(3+4, 4+5), "M8(3+4, 4+5)");
+
+#define M8(x,y) x y
+  assert(9, M8(, 4+5), "M8(, 4+5)");
+
+#define M8(x,y) x*y
+  assert(20, M8((2+3), 4), "M8((2+3), 4)");
+
+#define M8(x,y) x*y
+  assert(12, M8((2,3), 4), "M8((2,3), 4)");
+
+#define M9(x) M10(x) * x
+#define M10(x) M9(x) + 3
+  assert(10, M9(2), "M9(2)");
 
   printf("OK\n");
   return 0;

@@ -19,18 +19,19 @@ void error(char *fmt, ...) {
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+static void verror_at(char *filename, char *input, int line_no,
+                      char *loc, char *fmt, va_list ap) {
     // Find a line containing `loc`.
     char *line = loc;
-    while (current_input < line && line[-1] != '\n')
+    while (input < line && line[-1] != '\n')
         line--;
 
     char *end = loc;
-    while (*end != '\n')
+    while (*end && *end != '\n')
         end++;
 
     // Print out the line.
-    int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
+    int indent = fprintf(stderr, "%s:%d: ", filename, line_no);
     fprintf(stderr, "%.*s\n", (int)(end - line), line);
 
     // Show the error message.
@@ -50,21 +51,21 @@ static void error_at(char *loc, char *fmt, ...) {
     
     va_list ap;
     va_start(ap, fmt);
-    verror_at(line_no, loc, fmt, ap);
+    verror_at(current_filename, current_input, line_no, loc, fmt, ap);
     exit(1);
 }
 
 void error_tok(Token *tok, char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    verror_at(tok->line_no, tok->loc, fmt, ap);
+    verror_at(tok->filename, tok->input, tok->line_no, tok->loc, fmt, ap);
     exit(1);
 }
 
 void warn_tok(Token *tok, char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    verror_at(tok->line_no, tok->loc, fmt, ap);
+    verror_at(tok->filename, tok->input, tok->line_no, tok->loc, fmt, ap);
 }
 
 // Consumes the current token if it matches `op`.
@@ -95,6 +96,8 @@ static Token *new_token(TokenKind kind, Token *cur, char *str, int len) {
     tok->kind = kind;
     tok->loc = str;
     tok->len = len;
+    tok->filename = current_filename;
+    tok->input = current_input;
     cur->next = tok;
     return tok;
 }
@@ -338,29 +341,41 @@ static Token *read_number(Token *cur, char *start) {
     return tok;
 }
 
-static void convert_keywords(Token *tok) {
+void convert_keywords(Token *tok) {
     for (Token *t = tok; t->kind != TK_EOF; t = t->next)
         if (t->kind == TK_IDENT && is_keyword(t))
             t->kind = TK_RESERVED;
 }
 
-// Initialize line info for all tokens.
+// Initialize token position info for all tokens.
 static void add_line_info(Token *tok) {
     char *p = current_input;
     int line_no = 1;
+    bool at_bol = true;
+    bool has_space = false;
 
     do {
         if (p == tok->loc) {
             tok->line_no = line_no;
+            tok->at_bol = at_bol; 
+            tok->has_space = has_space;
             tok = tok->next;
         }
-        if (*p == '\n')
+
+        if (*p == '\n') {
             line_no++;
+            at_bol = true; // Set at_bol of next token to true if *p is `\n`.
+        } else if (isspace(*p)) {
+            has_space = true; // Set has_space of next token to true if *p is space.
+        } else {
+            at_bol = false; // Set at_bol of next token to false if *p isn't space.
+            has_space = false; // Set has_space of next token to false if *p isn't space.
+        }
     } while (*p++);
 }
 
 // Tokenize a given string and returns new tokens.
-static Token *tokenize(char *filename, char *p) {
+static Token *tokenize(char *filename, int file_no, char *p) {
     current_filename = filename;
     current_input = p;
     Token head = {};
@@ -454,8 +469,10 @@ static Token *tokenize(char *filename, char *p) {
     }
 
     new_token(TK_EOF, cur, p, 0);
+
+    for (Token *t = head.next; t; t = t->next)
+        t->file_no = file_no;
     add_line_info(head.next);
-    convert_keywords(head.next);
     return head.next;
 }
 
@@ -469,7 +486,7 @@ static char *read_file(char *path) {
     } else {
         fp = fopen(path, "r");
         if (!fp)
-            error("cannot open %s: %s", path, strerror(errno));
+            return NULL;
     }
 
     int buflen = 4096;
@@ -501,5 +518,14 @@ static char *read_file(char *path) {
 }
 
 Token *tokenize_file(char *path) {
-    return tokenize(path, read_file(path));
+    char *p = read_file(path);
+    if (!p)
+        return NULL;
+
+    // Emit a .file directive for the assembler.
+    static int file_no;
+    if (!opt_E)
+        printf(".file %d \"%s\"\n", ++file_no, path);
+
+    return tokenize(path, file_no, p);
 }
