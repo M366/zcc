@@ -1457,6 +1457,13 @@ int main() {
 #endif
          "4");
 
+  assert(5,
+#if no_such_symbol == 0
+         5,
+#else
+         6,
+#endif
+         "5");
 
   printf("OK\n");
   return 0;
