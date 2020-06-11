@@ -47,7 +47,7 @@ struct Macro {
     bool deleted;
 };
 
-// `#if` can be nested, so we use a stack to manage nested `#if`s
+// `#if` can be nested, so we use a stack to manage nested `#if`s.
 typedef struct CondIncl CondIncl; // condition include
 struct CondIncl {
     CondIncl *next;
@@ -421,10 +421,10 @@ static Token *find_arg(MacroArg *args, Token *tok) {
 }
 
 // Concatenates all tokens in `tok` and returns a new string.
-static char *join_tokens(Token *tok) {
+static char *join_tokens(Token *tok, Token *end) {
     // Compute the length of the resulting token.
     int len = 1;
-    for (Token *t = tok; t; t = t->next) {
+    for (Token *t = tok; t != end; t = t->next) {
         if (t != tok && t->has_space)
             len++;
         len += t->len;
@@ -434,7 +434,7 @@ static char *join_tokens(Token *tok) {
 
     // Copy token texts.
     int pos = 0;
-    for (Token *t = tok; t; t = t->next) {
+    for (Token *t = tok; t != end; t = t->next) {
         if (t != tok && t->has_space)
             buf[pos++] = ' ';
         strncpy(buf + pos, t->loc, t->len);
@@ -444,13 +444,13 @@ static char *join_tokens(Token *tok) {
     return buf;
 }
 
-// Concatenates all token in `arg` and returns a new string token.
+// Concatenates all tokens in `arg` and returns a new string token.
 // This function is used for the stringizing operator (#).
 static Token *stringize(Token *hash, Token *arg) {
     // Create a new string token. We need to set some value to its
     // source location for error reporting function, so we use a macro
     // name token as a template.
-    char *s = join_tokens(arg);
+    char *s = join_tokens(arg, NULL);
     return new_str_token(s, hash);
 }
 
@@ -551,7 +551,7 @@ static bool expand_macro(Token **rest, Token *tok) {
         return true;
     }
 
-    // If a funclike macro token is not followed an argument list,
+    // If a funclike macro token is not followed by an argument list,
     // treat it as a normal identifier.
     if (!equal(tok->next, "("))
         return false;
@@ -575,7 +575,67 @@ static bool expand_macro(Token **rest, Token *tok) {
     return true;
 }
 
-// Visit all tokens in `tok` while evaluating reprocessing
+// Returns a new string "dir/file".
+static char *join_paths(char *dir, char *file) {
+    char *buf = malloc(strlen(dir) + strlen(file) + 2); // add 2 for '/' and '\0'
+    sprintf(buf, "%s/%s", dir, file);
+    return buf;
+}
+
+// Returns true if a given file exists.
+static bool file_exists(char *path) {
+    struct stat st;
+    return !stat(path, &st);
+}
+
+// Read an #include argument.
+static char *read_include_path(Token **rest, Token *tok) {
+    // Pattern 1: #include "foo.h"
+    if (tok->kind == TK_STR) {
+        // A double-quoted filename for #include is a special kind of
+        // token, and we don't want to interpret any escape sequences in it.
+        // For example, "\f" in "C:\foo" is not a formfeed character but
+        // just two non-control characters, backslash and f.
+        // So we don't want to use token->contents.
+        char *filename = strndup(tok->loc + 1, tok->len - 2);
+        *rest = skip_line(tok->next);
+        return filename;
+    }
+
+    // Pattern 2: #include <foo.h>
+    if (equal(tok, "<")) {
+        // Reconstruct a filename from a sequence of tokens between
+        // "<" and ">".
+        Token *start = tok;
+        
+        // Find closing ">".
+        for (; !equal(tok, ">"); tok = tok->next)
+            if (tok->kind == TK_EOF)
+                error_tok(tok, "expected '>'");
+        
+        char *filename = join_tokens(start->next, tok); // this `tok` is `>`
+        *rest = skip_line(tok->next);
+
+        // Search a file from the include paths.
+        // TODO: implement the actual include paths.
+        char *path = join_paths(".", filename);
+        if (!file_exists(path))
+            error_tok(start, "'%s': file not found", filename);
+        return path;
+    }
+
+    // Pattern 3: #include FOO
+    // In this case FOO must be macro-expanded to either
+    // a single string token or a sequence of "<" ... ">".
+    if (tok->kind == TK_IDENT) {
+        Token *tok2 = preprocess(copy_line(rest, tok));
+        return read_include_path(&tok2, tok2);
+    }
+
+    error_tok(tok, "expected a filename");
+}
+
+// Visit all tokens in `tok` while evaluating preprocessing
 // macros and directives.
 static Token *preprocess2(Token *tok) {
     Token head = {};
@@ -586,7 +646,7 @@ static Token *preprocess2(Token *tok) {
         if (expand_macro(&tok, tok))
             continue;
 
-        // Pass through if it is not a "#"
+        // Pass through if it is not a "#".
         if (!is_hash(tok)) {
             cur = cur->next = tok;
             tok = tok->next;
@@ -597,17 +657,11 @@ static Token *preprocess2(Token *tok) {
         tok = tok->next;
 
         if (equal(tok, "include")) {
-            tok = tok->next;
-
-            if (tok->kind != TK_STR)
-                error_tok(tok, "expected a filename");
-
-            char *path = tok->contents; // TK_STR must have contents
+            char *path = read_include_path(&tok, tok->next);
             Token *tok2 = tokenize_file(path);
             if (!tok2)
                 error_tok(tok, "%s", strerror(errno));
-            tok = skip_line(tok->next);
-            tok = append(tok2, tok->next);
+            tok = append(tok2, tok);
             continue;
         }
 
