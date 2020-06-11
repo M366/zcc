@@ -24,7 +24,7 @@ int g5 = 5;
 long g6 = 6;
 int g9[3] = {0, 1, 2};
 struct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};
-struct {int a[2];} g12[2] ={{{1, 2}}};
+struct {int a[2];} g12[2] = {{{1, 2}}};
 char g17[] = "foobar";
 char g18[10] = "foobar";
 char g19[3] = "foobar";
@@ -158,6 +158,7 @@ typedef struct {
   void *reg_save_area;
 } va_list[1];
 
+
 int add_all1(int x, ...);
 int add_all3(int z, int b, int c, ...);
 
@@ -181,6 +182,8 @@ double add_double3(double x, double y, double z) {
 float add_float3(float x, float y, float z) {
   return x + y + z;
 }
+
+int M9(int x) { return x*x; }
 
 int main() {
   assert(0, 0, "0");
@@ -392,7 +395,7 @@ int main() {
   assert(3, ({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; }), "({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; })");
   assert(3, ({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; }), "({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; })");
 
-  assert(8, ({ union { int a; char b[6]; } x; sizeof(x);}), "({ union { int a; char b[6]; } x; sizeof(x);})");
+  assert(8, ({ union { int a; char b[6]; } x; sizeof(x); }), "({ union { int a; char b[6]; } x; sizeof(x); })");
   assert(3, ({ union { int a; char b[4]; } x; x.a = 515; x.b[0]; }), "({ union { int a; char b[4]; } x; x.a = 515; x.b[0]; })");
   assert(2, ({ union { int a; char b[4]; } x; x.a = 515; x.b[1]; }), "({ union { int a; char b[4]; } x; x.a = 515; x.b[1]; })");
   assert(0, ({ union { int a; char b[4]; } x; x.a = 515; x.b[2]; }), "({ union { int a; char b[4]; } x; x.a = 515; x.b[2]; })");
@@ -436,7 +439,7 @@ int main() {
   assert(1, ({ typedef struct {int a;} t; t x; x.a=1; x.a; }), "({ typedef struct {int a;} t; t x; x.a=1; x.a; })");
   assert(1, ({ typedef int t; t t=1; t; }), "({ typedef int t; t t=1; t; })");
   assert(2, ({ typedef struct {int a;} t; { typedef int t; } t x; x.a=2; x.a; }), "({ typedef struct {int a;} t; { typedef int t; } t x; x.a=2; x.a; })");
-  assert(4, ({ typedef int t; t x; sizeof(x); }), "({ typedef int t; t x; sizeof(x); })");
+  assert(4, ({ typedef t; t x; sizeof(x); }), "({ typedef t; t x; sizeof(x); })");
   assert(4, ({ typedef typedef t; t x; sizeof(x); }), "({ typedef typedef t; t x; sizeof(x); })");
   assert(3, ({ MyInt x=3; x; }), "({ MyInt x=3; x; })");
   assert(16, ({ MyInt2 x; sizeof(x); }), "({ MyInt2 x; sizeof(x); })");
@@ -746,7 +749,6 @@ int main() {
   assert('d', ({ char x[2][4]={"abc","def"}; x[1][0]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[1][0]; })");
   assert('f', ({ char x[2][4]={"abc","def"}; x[1][2]; }), "({ char x[2][4]={\"abc\",\"def\"}; x[1][2]; })");
 
-
   assert(4, ({ int x[]={1,2,3,4}; x[3]; }), "({ int x[]={1,2,3,4}; x[3]; })");
   assert(16, ({ int x[]={1,2,3,4}; sizeof(x); }), "({ int x[]={1,2,3,4}; sizeof(x); })");
   assert(4, ({ char x[]="foo"; sizeof(x); }), "({ char x[]=\"foo\"; sizeof(x); })");
@@ -830,7 +832,6 @@ int main() {
   assert(0, strcmp(g33[0], "foo"), "strcmp(g33[0], \"foo\")");
   assert(0, strcmp(g33[1], "bar"), "strcmp(g33[1], \"bar\")");
   assert(0, strcmp(g34, "foo"), "strcmp(g34, \"foo\")");
-
 
   assert(3, ({ int a[]={1,2,3,}; a[2]; }), "({ int a[]={1,2,3,}; a[2]; })");
   assert(1, ({ struct {int a,b,c;} x={1,2,3,}; x.a; }), "({ struct {int a,b,c;} x={1,2,3,}; x.a; })");
@@ -1393,6 +1394,10 @@ int main() {
 
 #define M8(x,y) x*y
   assert(12, M8((2,3), 4), "M8((2,3), 4)");
+
+#define M9(x) M10(x) * x
+#define M10(x) M9(x) + 3
+  assert(10, M9(2), "M9(2)");
 
   printf("OK\n");
   return 0;

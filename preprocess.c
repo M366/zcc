@@ -17,8 +17,9 @@
 // "hideset". Hideset is initially empty, and every time we expand a
 // macro, the macro name is added to the resulting tokens' hidesets.
 //
-// The above macro expansion algorithm is explained in this document,
-// which is used as a basis for the standard's wording:
+// The above macro expansion algorithm is explained in this document
+// written by Dave Prossor, which is used as a basis for the
+// standard's wording:
 // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
 
 #include "zcc.h"
@@ -116,6 +117,16 @@ static bool hideset_contains(Hideset *hs, char *s, int len) {
         if (strlen(hs->name) == len && !strncmp(hs->name, s, len))
             return true;
     return false;
+}
+
+static Hideset *hideset_intersection(Hideset *hs1, Hideset *hs2) { // intersection: a group of items that belong to two different sets.
+    Hideset head = {};
+    Hideset *cur = &head;
+
+    for (; hs1; hs1 = hs1->next)
+        if (hideset_contains(hs2, hs1->name, strlen(hs1->name)))
+            cur = cur->next = new_hideset(hs1->name);
+    return head.next;
 }
 
 static Token *add_hideset(Token *tok, Hideset *hs) {
@@ -313,7 +324,8 @@ static MacroArg *read_macro_args(Token **rest, Token *tok, MacroParam *params) {
 
     if (pp) // It isn't used?
         error_tok(start, "too many arguments");
-    *rest = skip(tok, ")");
+    skip(tok, ")");
+    *rest = tok;
     return head.next;
 }
 
@@ -330,7 +342,7 @@ static Token *find_arg(MacroArg *args, Token *tok) {
 }
 
 // Replace func-like macro parameters with given arguments.
-static Token *subst(Token *tok, MacroArg *args) {
+static Token *subst(Token *tok, MacroArg *args) { // subst: substitute
     Token head = {};
     Token *cur = &head;
 
@@ -377,8 +389,21 @@ static bool expand_macro(Token **rest, Token *tok) {
         return false;
     
     // Function-like macro application
+    Token *macro_token = tok;
     MacroArg *args = read_macro_args(&tok, tok, m->params);
-    *rest = append(subst(m->body, args), tok);
+    Token *rparen = tok; // right parenthsis
+
+    // Tokens that consist a func-like macro invocation may have different
+    // hidesets, and if that's the case, it's not clear what the hideset
+    // for the new tokens should be. We take the intersection of the
+    // macro token and the closing parenthesis and use it as a new hideset
+    // as explained in the Dave Prossor's algorithm.
+    Hideset *hs = hideset_intersection(macro_token->hideset, rparen->hideset);
+    hs = hideset_union(hs, new_hideset(m->name));
+
+    Token *body = subst(m->body, args);
+    body = add_hideset(body, hs);
+    *rest = append(body, tok->next);
     return true;
 }
 
