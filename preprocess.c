@@ -854,6 +854,27 @@ static void init_macros(void) {
     line_macro = add_macro("__LINE__", true, NULL);
 }
 
+// Concatenate two string literals. e.g. "foo" "bar" => "foobar"
+static Token *join_strings(Token *t1, Token *t2) { // t1->len = 5, t2->len = 5
+    char *buf = malloc(t1->len + t2->len - 1); // sizeof (t1->len + t2->len - 1) = 9
+    sprintf(buf, "%.*s%.*s", t1->len - 1, t1->loc, t2->len - 1, t2->loc + 1); //t1->loc = ["]foo", (t2->loc + 1) = "[b]ar"
+    return tokenize(t1->filename, t1->file_no, buf); // buf = '"' 'f' 'o' 'o' 'b' 'a' 'r' '"' '\0'
+}
+
+// Concatenate adjacent string literals into a single string literal
+// as per the C spec.
+static void join_adjacent_string_literals(Token *tok) {
+    while (tok) {
+        if (tok->kind == TK_STR && tok->next && tok->next->kind == TK_STR) {
+            Token *next = tok->next->next;
+            *tok = *join_strings(tok, tok->next);
+            tok->next = next;
+        } else {
+            tok = tok->next;
+        }
+    }
+}
+
 // Entry point function of the preprocessor.
 Token *preprocess(Token *tok) {
     init_macros();
@@ -861,5 +882,6 @@ Token *preprocess(Token *tok) {
     if (cond_incl)
         error_tok(cond_incl->tok, "unterminated conditional directive");
     convert_keywords(tok);
+    join_adjacent_string_literals(tok);
     return tok;
 }

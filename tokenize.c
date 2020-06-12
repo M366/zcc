@@ -188,7 +188,7 @@ static char read_escaped_char(char **new_pos, char *p) {
 }
 
 static Token *read_string_literal(Token *cur, char *start) {
-    char *p = start + 1;
+    char *p = start + 1; // e.g. "foo" => *start = `"`, *p = f"
     char *end = p;
 
     // Find the closing double-quote.
@@ -197,10 +197,10 @@ static Token *read_string_literal(Token *cur, char *start) {
             error_at(start, "unclosed string literal");
         if (*end == '\\')
             end++;
-    }
+    } // After the `for` statement, end = `"` 
 
     // Allocate a buffer that is large enough to hold the entire string.
-    char *buf = malloc(end - p + 1);
+    char *buf = malloc(end - p + 1); // sizeof (end-p+1) = 4
     int len = 0;
 
     while (*p != '"') {
@@ -208,13 +208,13 @@ static Token *read_string_literal(Token *cur, char *start) {
             buf[len++] = read_escaped_char(&p, p + 1);
         else
             buf[len++] = *p++;
-    }
+    } // After the `for` statement, *p = `"`
 
-    buf[len++] = '\0';
+    buf[len++] = '\0'; // After the line, buf = 'f' 'o' 'o' '\0', len = 4
 
-    Token *tok = new_token(TK_STR, cur, start, p - start + 1);
-    tok->contents = buf;
-    tok->cont_len = len;
+    Token *tok = new_token(TK_STR, cur, start, p - start + 1); // *start = `"`, *(p-start+1)=5
+    tok->contents = buf; // tok->contents = 'f' 'o' 'o' '\0'
+    tok->cont_len = len; // tok->cont_len = 4
     return tok;
 }
 
