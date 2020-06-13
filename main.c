@@ -5,8 +5,19 @@ char **include_paths;
 static char *input_file;
 
 static void usage(void) {
-    fprintf(stderr, "zcc [ -I<path> ] <file>\n");
+    fprintf(stderr, "zcc [ -I<path> ] [ -o <path> ]<file>\n");
     exit(1);
+}
+
+static void redirect_stdout(char *filename) {
+    if (!strcmp(filename, "-"))
+        return;
+    
+    FILE *fp = fopen(filename, "w");
+    if (!fp)
+        error("cannot open output file %s: %s", filename, strerror(errno));
+    dup2(fileno(fp), STDOUT_FILENO); // create a copy of the file descriptor to stdout.
+    fclose(fp); // close the old file descriptor.
 }
 
 static void parse_args(int argc, char **argv) {
@@ -24,6 +35,18 @@ static void parse_args(int argc, char **argv) {
 
         if (!strcmp(argv[i], "-E")) {
             opt_E = true;
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-o")) { // e.g. "-o <path>"
+            if (!argv[++i])
+                usage();
+            redirect_stdout(argv[i]);
+            continue;
+        }
+
+        if (!strncmp(argv[i], "-o", 2)) { // e.g. "-o<path>"
+            redirect_stdout(argv[i] + 2);
             continue;
         }
 
