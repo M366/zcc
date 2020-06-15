@@ -310,15 +310,15 @@ static void gen_expr(Node *node) {
             Member *mem = node->lhs->member;
             printf("  mov %s, %s\n", reg(top), reg(top - 1)); // reg(top - 1) is address of the member
             top++;
-            load(mem->ty); // load a member's value that contains the other value.
+            load(mem->ty); // load a member's value that contains the other member's value.
 
             printf("  and %s, %ld\n", reg(top - 3), (1L << mem->bit_width) - 1); // delete the upper bits over the member of new value.
             printf("  shl %s, %d\n", reg(top - 3), mem->bit_offset); // shift new value to correct bit for the member.
             // Now, reg(top - 3) has shifted new value that match the member bitfield.
             long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
             printf("  movabs rax, %ld\n", ~mask);
-            printf("  and %s, rax\n", reg(top - 1)); // delete the old value of the member only. Other values remain in the register.
-            printf("  or %s, %s\n", reg(top - 3), reg(top - 1)); // merge new value and other values. Now, reg(top-3) has merged value.
+            printf("  and %s, rax\n", reg(top - 1)); // delete the old value of the member only. Other member's values remain in the register.
+            printf("  or %s, %s\n", reg(top - 3), reg(top - 1)); // merge new value and other member's values. Now, reg(top-3) has merged value.
             top--;
         }
 
