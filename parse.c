@@ -313,6 +313,13 @@ static void push_tag_scope(Token *tok, Type *ty) {
     tag_scope = sc;
 }
 
+// Create a node for "__func__" local variable and add that
+// to the current scope.
+static void add_func_ident(char *func) {
+    Var *var = new_string_literal(func, strlen(func) + 1); // last 1 for `\0`
+    push_scope("__func__")->var = var;
+}
+
 // funcdef = typespec declarator compound-stmt
 static Function *funcdef(Token **rest, Token *tok) {
     locals = NULL;
@@ -338,6 +345,7 @@ static Function *funcdef(Token **rest, Token *tok) {
     fn->params = locals;
 
     tok = skip(tok, "{");
+    add_func_ident(fn->name);
     fn->node = compound_stmt(rest, tok)->body;
     fn->locals = locals;
     leave_scope();
@@ -475,26 +483,32 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
             ty = ty_bool;
             break;
         case CHAR:
-        case SIGNED + CHAR:
             ty = ty_char;
+            break;
+        case SIGNED + CHAR:
+            ty = ty_schar;
             break;
         case UNSIGNED + CHAR:
             ty = ty_uchar;
             break;
         case SHORT:
         case SHORT + INT:
+            ty = ty_short;
+            break;
         case SIGNED + SHORT:
         case SIGNED + SHORT + INT:
-            ty = ty_short;
+            ty = ty_sshort;
             break;
         case UNSIGNED + SHORT:
         case UNSIGNED + SHORT + INT:
             ty = ty_ushort;
             break;
         case INT:
+            ty = ty_int;
+            break;
         case SIGNED:
         case SIGNED + INT:
-            ty = ty_int;
+            ty = ty_sint;
             break;
         case UNSIGNED:
         case UNSIGNED + INT:
@@ -504,11 +518,13 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
         case LONG + INT:
         case LONG + LONG:
         case LONG + LONG + INT:
+            ty = ty_long;
+            break;
         case SIGNED + LONG:
         case SIGNED + LONG + INT:
         case SIGNED + LONG + LONG:
         case SIGNED + LONG + LONG + INT:
-            ty = ty_long;
+            ty = ty_slong;
             break;
         case UNSIGNED + LONG:
         case UNSIGNED + LONG + INT:
@@ -980,6 +996,20 @@ static Node *lvar_initializer(Token **rest, Token *tok, Var *var) {
     return create_lvar_init(init, var->ty, &desg, tok);
 }
 
+static unsigned long read_buf(char *buf, int sz) {
+    switch (sz) {
+    case 1:
+        return *(unsigned char *)buf;
+    case 2:
+        return *(unsigned short *)buf;
+    case 4:
+        return *(unsigned int *)buf;
+    default:
+        assert(sz == 8);
+        return *(unsigned long *)buf;
+    }
+}
+
 static void write_buf(char *buf, unsigned long val, int sz) {
     switch (sz) {
     case 1:
@@ -1014,8 +1044,19 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
         int i = 0;
         for (Member *mem = ty->members; mem; mem = mem->next, i++) {
             Initializer *child = init->children[i];
-            if (child)
-                cur = write_gvar_data(cur, child, mem->ty, buf, offset + mem->offset);
+            if (!child)
+                continue;
+            
+            if (mem->is_bitfield) {
+                char *loc = buf + offset + mem->offset;
+                long val = read_buf(loc, size_of(mem->ty));
+                long mask = (1L << mem->bit_width) - 1; // bitfield takes only lower bit_width bits from initializer. Create a mask to trim only the lower bits.
+                long newval = val | ((eval(child->expr) & mask) << mem->bit_offset); // merge
+                write_buf(loc, newval, size_of(mem->ty));
+                continue;
+            }
+
+            cur = write_gvar_data(cur, child, mem->ty, buf, offset + mem->offset);
         }
         return cur;
     }
@@ -1744,7 +1785,7 @@ static Node *compound_literal(Token **rest, Token *tok, Type *ty, Token *start) 
 
     Var *var = new_lvar(new_gvar_name(), ty);
     Node *lhs = lvar_initializer(rest, tok, var);
-    Node *rhs = new_var_node(var, tok); // In the end, rhs has compound-literal object.
+    Node *rhs = new_var_node(var, tok); // rhs has compound-literal object.
     return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
@@ -1820,6 +1861,19 @@ static Member *struct_members(Token **rest, Token *tok) {
             mem->ty = declarator(&tok, tok, basety);
             mem->name = mem->ty->name;
             mem->align = attr.align ? attr.align : mem->ty->align;
+
+            if (consume(&tok, tok, ":")) {
+                mem->is_bitfield = true;
+                mem->bit_width = const_expr(&tok, tok);
+
+                // Unlike other variables, bitfields are unsigned by default
+                // as per the x86-64 psABI spec.
+                if (!mem->ty->is_signed) {
+                    mem->ty = copy_type(mem->ty);
+                    mem->ty->is_unsigned = true;
+                }
+            }
+
             cur = cur->next = mem;
         }
     }
@@ -1876,16 +1930,31 @@ static Type *struct_decl(Token **rest, Token *tok) {
     Type *ty = struct_union_decl(rest, tok);
 
     // Assign offsets within the struct to members.
-    int offset = 0;
+    int bits = 0; // instead of offsets.
+
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        offset = align_to(offset, mem->align);
-        mem->offset = offset;
-        offset += size_of(mem->ty);
+        if (mem->is_bitfield && mem->bit_width == 0) {
+            // Zero-width anonymous bitfield has a special meaning.
+            // It affects only alignment.
+            bits = align_to(bits, size_of(mem->ty) * 8);
+        } else if (mem->is_bitfield) {
+            int sz = size_of(mem->ty);
+            if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
+                bits = align_to(bits, sz * 8);
+
+            mem->offset = align_down(bits / 8, sz);
+            mem->bit_offset = bits % (sz * 8);
+            bits += mem->bit_width;
+        } else {
+            bits = align_to(bits, mem->align * 8);
+            mem->offset = bits / 8;
+            bits += size_of(mem->ty) * 8;
+        }
         
         if (ty->align < mem->align)
             ty->align = mem->align;
     }
-    ty->size = align_to(offset, ty->align);
+    ty->size = align_to(bits, ty->align * 8) / 8;
     return ty;
 }
 

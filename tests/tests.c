@@ -1,3 +1,6 @@
+char *main_filename = __FILE__;
+int main_line = __LINE__;
+
 // You can format this file with the following one-liner:
 // $ perl -i -pe 's{assert\((.*?), (.*), ".*"\);}{($a,$b)=($1,$2); (($c=$2) =~ s/([\\"])/\\\1/g); "assert($a, $b, \"$c\");"}ge' tests/tests.c
 
@@ -44,6 +47,12 @@ char *g34 = {"foo"};
 
 float g40 = 1.5;
 double g41 = 0.0 ? 55 : (0, 1 + 1 * 5.0 / 2 * (double)2 * (int)2.0);
+
+struct {
+  char a;
+  int b : 5;
+  int c : 10;
+} g45 = {1, 2, 3};
 
 typedef struct Tree {
     int val;
@@ -184,6 +193,10 @@ float add_float3(float x, float y, float z) {
 }
 
 int M9(int x) { return x*x; }
+
+char *func_fn(void) {
+  return __func__;
+}
 
 int main() {
   assert(0, 0, "0");
@@ -1398,6 +1411,167 @@ int main() {
 #define M9(x) M10(x) * x
 #define M10(x) M9(x) + 3
   assert(10, M9(2), "M9(2)");
+
+#define M11(x) #x
+  assert('a', M11( a!b  `""c)[0], "M11( a!b  `\"\"c)[0]");
+  assert('!', M11( a!b  `""c)[1], "M11( a!b  `\"\"c)[1]");
+  assert('b', M11( a!b  `""c)[2], "M11( a!b  `\"\"c)[2]");
+  assert(' ', M11( a!b  `""c)[3], "M11( a!b  `\"\"c)[3]");
+  assert('`', M11( a!b  `""c)[4], "M11( a!b  `\"\"c)[4]");
+  assert('"', M11( a!b  `""c)[5], "M11( a!b  `\"\"c)[5]");
+  assert('"', M11( a!b  `""c)[6], "M11( a!b  `\"\"c)[6]");
+  assert('c', M11( a!b  `""c)[7], "M11( a!b  `\"\"c)[7]");
+  assert(0, M11( a!b  `""c)[8], "M11( a!b  `\"\"c)[8]");
+
+#define paste(x,y) x##y
+  assert(15, paste(1,5), "paste(1,5)");
+  assert(255, paste(0,xff), "paste(0,xff)");
+  assert(3, ({ int foobar=3; paste(foo,bar); }), "({ int foobar=3; paste(foo,bar); })");
+  assert(5, paste(5,), "paste(5,)");
+  assert(5, paste(,5), "paste(,5)");
+
+#define paste2(x) x##2
+  assert(12, paste2(1), "paste2(1)");
+
+#define paste3(x) 2##x
+  assert(21, paste3(1), "paste3(1)");
+
+#define M12
+  assert(3,
+#if defined(M12)
+         3,
+#else
+         4,
+#endif
+         "3");
+
+#define M12
+  assert(3,
+#if defined M12
+         3,
+#else
+         4,
+#endif
+         "3");
+
+  assert(4,
+#if defined(M12) - 1
+         3,
+#else
+         4,
+#endif
+         "4");
+
+  assert(4,
+#if defined(NO_SUCH_MACRO)
+         3,
+#else
+         4,
+#endif
+         "4");
+
+  assert(5,
+#if no_such_symbol == 0
+         5,
+#else
+         6,
+#endif
+         "5");
+
+  assert(1, size\
+of(char), \
+         "sizeof(char)");
+
+#include "include3.h"
+  assert(3, foo, "foo");
+
+#include "include4.h"
+  assert(4, foo, "foo");
+
+#define M13 "include3.h"
+#include M13
+  assert(3, foo, "foo");
+
+#define M13 < include4.h
+#include M13 >
+  assert(4, foo, "foo");
+
+#undef foo
+
+  assert(1, __STDC__, "__STDC__");
+
+  assert(0, strcmp(main_filename, "tests.c"), "strcmp(main_filename, \"tests.c\")");
+  assert(2, main_line, "main_line");
+  assert(0, strcmp(include1_filename, "include1.h"), "strcmp(include1_filename, \"include1.h\")");
+  assert(4, include1_line, "include1_line");
+
+#define M14(...) 3
+  assert(3, M14(), "M14()");
+
+#define M14(...) __VA_ARGS__
+  assert(5, M14(5), "M14(5)");
+
+#define M14(...) add2(__VA_ARGS__)
+  assert(8, M14(2, 6), "M14(2, 6)");
+
+#define M14(...) add6(1,2,__VA_ARGS__,6)
+  assert(21, M14(3,4,5), "M14(3,4,5)");
+
+#define M14(x, ...) add6(1,2,x,__VA_ARGS__,6)
+  assert(21, M14(3,4,5), "M14(3,4,5)");
+
+  assert(5, sizeof(__func__), "sizeof(__func__)"); // `main` and `\0`
+  assert(0, strcmp("main", __func__), "strcmp(\"main\", __func__)");
+  assert(0, strcmp("func_fn", func_fn()), "strcmp(\"func_fn\", func_fn())");
+
+  assert(7, sizeof("abc" "def"), "sizeof(\"abc\" \"def\")");
+  assert(9, sizeof("abc" "d" "efgh"), "sizeof(\"abc\" \"d\" \"efgh\")");
+  assert(0, strcmp("abc" "d" "\nefgh", "abcd\nefgh"), "strcmp(\"abc\" \"d\" \"\\nefgh\", \"abcd\\nefgh\")");
+  assert(0, !strcmp("abc" "d", "abcd\nefgh"), "!strcmp(\"abc\" \"d\", \"abcd\\nefgh\")");
+
+#define CONCAT(x,y) x##y
+  assert(5, ({ int f0zz=5; CONCAT(f,0zz); }), "({ int f0zz=5; CONCAT(f,0zz); })");
+  assert(5, ({ CONCAT(4,.57) + 0.5; }), "({ CONCAT(4,.57) + 0.5; })");
+
+  assert(42, ANSWER, "ANSWER");
+
+  assert(4, sizeof(struct {int x:1; }), "sizeof(struct {int x:1; })");
+  assert(8, sizeof(struct {long x:1; }), "sizeof(struct {long x:1; })");
+
+  struct bit1 {
+    short a;
+    char b;
+    int c : 2;
+    int d : 3;
+    int e : 3;
+  };
+
+  assert(4, sizeof(struct bit1), "sizeof(struct bit1)");
+  assert(1, ({ struct bit1 x; x.a=1; x.b=2; x.c=3; x.d=4; x.e=5; x.a; }), "({ struct bit1 x; x.a=1; x.b=2; x.c=3; x.d=4; x.e=5; x.a; })");
+  assert(1, ({ struct bit1 x={1,2,3,4,5}; x.a; }), "({ struct bit1 x={1,2,3,4,5}; x.a; })");
+  assert(2, ({ struct bit1 x={1,2,3,4,5}; x.b; }), "({ struct bit1 x={1,2,3,4,5}; x.b; })");
+  assert(3, ({ struct bit1 x={1,2,3,4,5}; x.c; }), "({ struct bit1 x={1,2,3,4,5}; x.c; })");
+  assert(4, ({ struct bit1 x={1,2,3,4,5}; x.d; }), "({ struct bit1 x={1,2,3,4,5}; x.d; })");
+  assert(5, ({ struct bit1 x={1,2,3,4,5}; x.e; }), "({ struct bit1 x={1,2,3,4,5}; x.e; })");
+
+  struct bit2 {
+    int a : 1;
+    unsigned int b : 1;
+    signed int c : 1;
+  };
+
+  assert(4, sizeof(struct bit2), "sizeof(struct bit2)");
+  assert(1, ({ struct bit2 x={1,1,1}; x.a; }), "({ struct bit2 x={1,1,1}; x.a; })");
+  assert(1, ({ struct bit2 x={1,1,1}; x.b; }), "({ struct bit2 x={1,1,1}; x.b; })");
+  assert(-1, ({ struct bit2 x={1,1,1}; x.c; }), "({ struct bit2 x={1,1,1}; x.c; })");
+
+  assert(1, g45.a, "g45.a");
+  assert(2, g45.b, "g45.b");
+  assert(3, g45.c, "g45.c");
+
+  assert(4, sizeof(struct {int a:3; int c:1; int c:5;}), "sizeof(struct {int a:3; int c:1; int c:5;})");
+  assert(8, sizeof(struct {int a:3; int:0; int c:5;}), "sizeof(struct {int a:3; int:0; int c:5;})");
+  assert(4, sizeof(struct {int a:3; int:0;}), "sizeof(struct {int a:3; int:0;})");
 
   printf("OK\n");
   return 0;

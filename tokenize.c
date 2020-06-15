@@ -188,7 +188,7 @@ static char read_escaped_char(char **new_pos, char *p) {
 }
 
 static Token *read_string_literal(Token *cur, char *start) {
-    char *p = start + 1;
+    char *p = start + 1; // e.g. "foo" => *start = `"`, *p = f"
     char *end = p;
 
     // Find the closing double-quote.
@@ -197,10 +197,10 @@ static Token *read_string_literal(Token *cur, char *start) {
             error_at(start, "unclosed string literal");
         if (*end == '\\')
             end++;
-    }
+    } // After the `for` statement, end = `"` 
 
     // Allocate a buffer that is large enough to hold the entire string.
-    char *buf = malloc(end - p + 1);
+    char *buf = malloc(end - p + 1); // sizeof (end-p+1) = 4
     int len = 0;
 
     while (*p != '"') {
@@ -208,13 +208,13 @@ static Token *read_string_literal(Token *cur, char *start) {
             buf[len++] = read_escaped_char(&p, p + 1);
         else
             buf[len++] = *p++;
-    }
+    } // After the `for` statement, *p = `"`
 
-    buf[len++] = '\0';
+    buf[len++] = '\0'; // After the line, buf = 'f' 'o' 'o' '\0', len = 4
 
-    Token *tok = new_token(TK_STR, cur, start, p - start + 1);
-    tok->contents = buf;
-    tok->cont_len = len;
+    Token *tok = new_token(TK_STR, cur, start, p - start + 1); // *start = `"`, *(p-start+1)=5
+    tok->contents = buf; // tok->contents = 'f' 'o' 'o' '\0'
+    tok->cont_len = len; // tok->cont_len = 4
     return tok;
 }
 
@@ -239,8 +239,8 @@ static Token *read_char_literal(Token *cur, char *start) {
     return tok;
 }
 
-static Token *read_int_literal(Token *cur, char *start) {
-    char *p = start;
+static bool convert_pp_int(Token *tok) {
+    char *p = tok->loc;
 
     // Read a binary, octal, decimal or hexadecimal number.
     int base = 10;
@@ -308,21 +308,30 @@ static Token *read_int_literal(Token *cur, char *start) {
             ty = ty_int;
     }
 
-    Token *tok = new_token(TK_NUM, cur, start, p - start);
+    if (p != tok->loc + tok->len)
+        return false;
+
+    tok->kind = TK_NUM;
     tok->val = val;
     tok->ty = ty;
-    return tok;
+    return true;
 }
 
-static Token *read_number(Token *cur, char *start) {
+// The definition of the numeric literal at the preprocessing stage
+// is more relaxed than the definition of that at the later stages.
+// In order to handle that, a numeric literal is tokenized as a
+// "pp-number" token first and then converted to a regular number
+// token after preprocessing.
+//
+// This function converts a pp-number token to a regular number token.
+static void convert_pp_number(Token *tok) {
     // Try to parse as an integer constant.
-    Token *tok = read_int_literal(cur, start);
-    if (!strchr(".eEfF", start[tok->len]))
-        return tok;
+    if (convert_pp_int(tok))
+        return;
 
     // If it's not an integer, it must be a floating point constant.
     char *end;
-    double val = strtod(start, &end);
+    double val = strtod(tok->loc, &end);
 
     Type *ty;
     if (*end == 'f' || *end == 'F') {
@@ -335,16 +344,26 @@ static Token *read_number(Token *cur, char *start) {
         ty = ty_double;
     }
 
-    tok = new_token(TK_NUM, cur, start, end - start);
+    if (tok->loc + tok->len != end)
+        error_tok(tok, "invalid numeric constant");
+
+    tok->kind = TK_NUM;
     tok->fval = val;
     tok->ty = ty;
-    return tok;
 }
 
-void convert_keywords(Token *tok) {
-    for (Token *t = tok; t->kind != TK_EOF; t = t->next)
-        if (t->kind == TK_IDENT && is_keyword(t))
-            t->kind = TK_RESERVED;
+void convert_pp_tokens(Token *tok) {
+    for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
+        switch (t->kind) {
+        case TK_IDENT:
+            if (is_keyword(t))
+                t->kind = TK_RESERVED;
+            continue;
+        case TK_PP_NUM:
+            convert_pp_number(t);
+            continue;
+        }
+    }
 }
 
 // Initialize token position info for all tokens.
@@ -375,7 +394,7 @@ static void add_line_info(Token *tok) {
 }
 
 // Tokenize a given string and returns new tokens.
-static Token *tokenize(char *filename, int file_no, char *p) {
+Token *tokenize(char *filename, int file_no, char *p) {
     current_filename = filename;
     current_input = p;
     Token head = {};
@@ -407,8 +426,16 @@ static Token *tokenize(char *filename, int file_no, char *p) {
 
         // Numeric literal
         if (isdigit(*p) || (p[0] == '.' && isdigit(p[1]))) {
-            cur = read_number(cur, p);
-            p += cur->len;
+            char *q = p++;
+            for (;;) {
+                if (p[0] && p[1] && strchr("eEpP", p[0]) && strchr("+-", p[1]))
+                    p += 2;
+                else if (isalnum(*p) || *p == '.')
+                    p++;
+                else
+                    break;
+            }
+            cur = new_token(TK_PP_NUM, cur, q, p - q);
             continue;
         }
 
@@ -453,7 +480,7 @@ static Token *tokenize(char *filename, int file_no, char *p) {
             startswith(p, "&=") || startswith(p, "|=") ||
             startswith(p, "^=") || startswith(p, "&&") ||
             startswith(p, "||") || startswith(p, "<<") ||
-            startswith(p, ">>")) {
+            startswith(p, ">>") || startswith(p, "##")) {
             cur = new_token(TK_RESERVED, cur, p, 2);
             p += 2;
             continue;
@@ -517,10 +544,37 @@ static char *read_file(char *path) {
     return buf;
 }
 
+// Removes backslashes followed by a newline.
+static void remove_backslash_newline(char *p) {
+    char *q = p;
+
+    // We want to keep the number of newline characters so that
+    // the logical line number matches the physical one.
+    // This counter maintain the number of newlines we have removed.
+    int cnt = 0;
+
+    while (*p) {
+        if (startswith(p, "\\\n")) {
+            p += 2;
+            cnt++;
+        } else if (*p == '\n') {
+            *q++ = *p++;
+            for (; cnt > 0; cnt--)
+                *q++ = '\n';
+        } else {
+            *q++ = *p++;
+        }
+    }
+
+    *q = '\0';
+}
+
 Token *tokenize_file(char *path) {
     char *p = read_file(path);
     if (!p)
         return NULL;
+    
+    remove_backslash_newline(p);
 
     // Emit a .file directive for the assembler.
     static int file_no;

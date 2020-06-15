@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 typedef struct Type Type;
 typedef struct Hideset Hideset;
@@ -24,6 +27,7 @@ typedef enum {
     TK_IDENT,    // Identifiers
     TK_STR,      // String literals
     TK_NUM,      // Numeric literals
+    TK_PP_NUM,   // Preprocessing numbers
     TK_EOF,      // End-of-file markers
 } TokenKind;
 
@@ -56,13 +60,16 @@ void warn_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
-void convert_keywords(Token *tok);
+void convert_pp_tokens(Token *tok);
+Token *tokenize(char *filename, int file_no, char *p);
 Token *tokenize_file(char *filename);
 
 //
 // preprocess.c
 //
 
+void init_macros(void);
+void define_macro(char *name, char *buf);
 Token *preprocess(Token *tok);
 
 //
@@ -241,6 +248,7 @@ struct Type {
     int size;           // sizeof() value
     int align;          // alignment
     bool is_unsigned;   // unsigned or signed
+    bool is_signed;     // true if "signed" keyword is specified
     bool is_incomplete; // incomplete type
     bool is_const;
 
@@ -279,6 +287,11 @@ struct Member {
     Token *name;
     int align;
     int offset;
+
+    // Bitfield
+    int is_bitfield;
+    int bit_offset;
+    int bit_width;
 };
 
 extern Type *ty_void;
@@ -288,6 +301,11 @@ extern Type *ty_char;
 extern Type *ty_short;
 extern Type *ty_int;
 extern Type *ty_long;
+
+extern Type *ty_schar;
+extern Type *ty_sshort;
+extern Type *ty_sint;
+extern Type *ty_slong;
 
 extern Type *ty_uchar;
 extern Type *ty_ushort;
@@ -302,6 +320,7 @@ bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 Type *copy_type(Type *ty);
 int align_to(int n, int align);
+int align_down(int n, int align);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
@@ -322,3 +341,4 @@ void codegen(Program *prog);
 //
 
 extern bool opt_E;
+extern char **include_paths;

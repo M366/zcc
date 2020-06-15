@@ -43,11 +43,12 @@ struct Macro {
     char *name;
     bool is_objlike; // Object-like or function-like
     MacroParam *params;
+    bool is_variadic;
     Token *body;
     bool deleted;
 };
 
-// `#if` can be nested, so we use a stack to manage nested `#if`s
+// `#if` can be nested, so we use a stack to manage nested `#if`s.
 typedef struct CondIncl CondIncl; // condition include
 struct CondIncl {
     CondIncl *next;
@@ -63,9 +64,12 @@ struct Hideset {
 };
 
 static Macro *macros;
+static Macro *file_macro;
+static Macro *line_macro;
 static CondIncl *cond_incl;
 
 static Token *preprocess2(Token *tok);
+static Macro *find_macro(Token *tok);
 
 static bool is_hash(Token *tok) {
     return tok->at_bol && equal(tok, "#");
@@ -190,6 +194,33 @@ static Token *skip_cond_incl(Token *tok) {
     return tok;
 }
 
+// Double-quote a given string and returns it.
+static char *quote_string(char *str) {
+    int bufsize = 3; // '"', '"', '\0'
+    for (int i = 0; str[i]; i++) {
+        if (str[i] == '\\' || str[i] == '"')
+            bufsize++;
+        bufsize++;
+    }
+
+    char *buf = malloc(bufsize);
+    char *p = buf;
+    *p++ = '"';
+    for (int i = 0; str[i]; i++) {
+        if (str[i] == '\\' || str[i] == '"')
+            *p++ = '\\';
+        *p++ = str[i];
+    }
+    *p++ = '"';
+    *p++ = '\0';
+    return buf;
+}
+
+static Token *new_str_token(char *str, Token *tmpl) { // tmpl: template
+    char *buf = quote_string(str);
+    return tokenize(tmpl->filename, tmpl->file_no, buf);
+}
+
 // Copy all tokens until the next newline, terminate them with
 // an EOF token and then returns them. This function is used to
 // create a new list of tokens for `#if` arguments.
@@ -205,10 +236,64 @@ static Token *copy_line(Token **rest, Token *tok) {
     return head.next;
 }
 
+static Token *new_num_token(int val, Token *tmpl) {
+    char *buf = malloc(20);
+    sprintf(buf, "%d\n", val);
+    return tokenize(tmpl->filename, tmpl->file_no, buf);
+}
+
+static Token *read_const_expr(Token **rest, Token *tok) {
+    tok = copy_line(rest, tok);
+
+    Token head = {};
+    Token *cur = &head;
+
+    while (tok->kind != TK_EOF) {
+        // "defined(foo)" or "defined foo" becomes "1" if macro "foo"
+        // is defined. Otherwise "0".
+        if (equal(tok, "defined")) {
+            Token *start = tok;
+            bool has_paren = consume(&tok, tok->next, "(");
+
+            if (tok->kind != TK_IDENT)
+                error_tok(start, "macro name must be an identifier");
+            Macro *m = find_macro(tok);
+            tok = tok->next;
+
+            if (has_paren)
+                tok = skip(tok, ")");
+            
+            cur = cur->next = new_num_token(m ? 1 : 0, start);
+            continue;
+        }
+
+        cur = cur->next = tok;
+        tok = tok->next;
+    }
+
+    cur->next = tok;
+    return head.next;
+}
+
 // Read and evaluate a constant expression.
 static long eval_const_expr(Token **rest, Token *tok) {
-    Token *expr = copy_line(rest, tok);
+    Token *expr = read_const_expr(rest, tok);
     expr = preprocess2(expr);
+
+    // The standard requires we replace remaining non-macro
+    // identifiers with "0" before evaluating a constant expression.
+    // I don't know the rationale behind it, but I guess there's a
+    // historical reason.
+    for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
+        if (t->kind == TK_IDENT) {
+            Token *next = t->next;
+            *t = *new_num_token(0, t);
+            t->next = next;
+        }
+    }
+
+    // Convert pp-numbers to regular numbers
+    convert_pp_tokens(expr);
 
     Token *rest2;
     long val = const_expr(&rest2, expr);
@@ -247,13 +332,20 @@ static Macro *add_macro(char *name, bool is_objlike, Token *body) {
     return m;
 }
 
-static MacroParam *read_macro_params(Token **rest, Token *tok) {
+static MacroParam *read_macro_params(Token **rest, Token *tok, bool *is_variadic) {
     MacroParam head = {};
     MacroParam *cur = &head;
 
     while (!equal(tok, ")")) {
         if (cur != &head)
             tok = skip(tok, ",");
+
+        if (equal(tok, "...")) {
+            *is_variadic = true;
+            tok = tok->next;
+            skip(tok, ")"); // `...` must be last of params, and then `)`
+            break;
+        }
         
         if (tok->kind != TK_IDENT)
             error_tok(tok, "expected an identifier");
@@ -262,6 +354,7 @@ static MacroParam *read_macro_params(Token **rest, Token *tok) {
         cur = cur->next = m;
         tok = tok->next;
     }
+
     *rest = tok->next;
     return head.next;
 }
@@ -274,21 +367,29 @@ static void read_macro_definition(Token **rest, Token *tok) {
 
     if (!tok->has_space && equal(tok, "(")) {
         // Function-like macro
-        MacroParam *params = read_macro_params(&tok, tok->next);
+        bool is_variadic = false;
+        MacroParam *params = read_macro_params(&tok, tok->next, &is_variadic);
+
         Macro *m = add_macro(name, false, copy_line(rest, tok));
         m->params = params;
+        m->is_variadic = is_variadic;
     } else {
         // Object-like macro
         add_macro(name, true, copy_line(rest, tok));
     }
 }
-
-static MacroArg *read_macro_arg_one(Token **rest, Token *tok) {
+// Read one token and set to one macro argument. But if `read_rest` is true, keep reading multiple tokens until read last `)` and all tokens set to one argument.
+static MacroArg *read_macro_arg_one(Token **rest, Token *tok, bool read_rest) {
     Token head = {};
     Token *cur = &head;
     int level = 0;
 
-    while (level > 0 || (!equal(tok, ",") && !equal(tok, ")"))) { // if level is not 0, () is not closed.
+    for (;;) {
+        if (level == 0 && equal(tok, ")"))
+            break;
+        if (level == 0 && !read_rest && equal(tok, ","))
+            break;
+
         if (tok->kind == TK_EOF)
             error_tok(tok, "premature end of input");
 
@@ -307,7 +408,8 @@ static MacroArg *read_macro_arg_one(Token **rest, Token *tok) {
     return arg;
 }
 
-static MacroArg *read_macro_args(Token **rest, Token *tok, MacroParam *params) {
+static MacroArg *
+read_macro_args(Token **rest, Token *tok, MacroParam *params, bool is_variadic) {
     Token *start = tok;
     tok = tok->next->next;
 
@@ -318,12 +420,19 @@ static MacroArg *read_macro_args(Token **rest, Token *tok, MacroParam *params) {
     for (; pp; pp = pp->next) {
         if (cur != &head)
             tok = skip(tok, ",");
-        cur = cur->next = read_macro_arg_one(&tok, tok);
+        cur = cur->next = read_macro_arg_one(&tok, tok, false);
         cur->name = pp->name;
     }
 
-    if (pp) // It isn't used?
+    if (is_variadic) {
+        if (pp != params) // always true?
+            tok = skip(tok, ",");
+        cur = cur->next = read_macro_arg_one(&tok, tok, true);
+        cur->name = "__VA_ARGS__";
+    } else if (pp) { // always false?
         error_tok(start, "too many arguments");
+    }
+
     skip(tok, ")");
     *rest = tok;
     return head.next;
@@ -341,6 +450,53 @@ static Token *find_arg(MacroArg *args, Token *tok) {
     return NULL;
 }
 
+// Concatenates all tokens in `tok` and returns a new string.
+static char *join_tokens(Token *tok, Token *end) {
+    // Compute the length of the resulting token.
+    int len = 1;
+    for (Token *t = tok; t != end; t = t->next) {
+        if (t != tok && t->has_space)
+            len++;
+        len += t->len;
+    }
+
+    char *buf = malloc(len);
+
+    // Copy token texts.
+    int pos = 0;
+    for (Token *t = tok; t != end; t = t->next) {
+        if (t != tok && t->has_space)
+            buf[pos++] = ' ';
+        strncpy(buf + pos, t->loc, t->len);
+        pos += t->len;
+    }
+    buf[pos] = '\0';
+    return buf;
+}
+
+// Concatenates all tokens in `arg` and returns a new string token.
+// This function is used for the stringizing operator (#).
+static Token *stringize(Token *hash, Token *arg) {
+    // Create a new string token. We need to set some value to its
+    // source location for error reporting function, so we use a macro
+    // name token as a template.
+    char *s = join_tokens(arg, NULL);
+    return new_str_token(s, hash);
+}
+
+// Concatenate two tokens to create a new token.
+static Token *paste(Token *lhs, Token *rhs) {
+    // Paste the two tokens.
+    char *buf = malloc(lhs->len + rhs->len + 1); // last 1 for '\0'
+    sprintf(buf, "%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc); // sprintf write terminate null byte '\0'
+
+    // Tokenize the resulting string.
+    Token *tok = tokenize(lhs->filename, lhs->file_no, buf);
+    if (tok->next->kind != TK_EOF)
+        error_tok(lhs, "pasting forms '%s', an invalid token", buf);
+    return tok;
+}
+
 // Replace func-like macro parameters with given arguments.
 static Token *subst(Token *tok, MacroArg *args) { // subst: substitute
     Token head = {};
@@ -349,19 +505,61 @@ static Token *subst(Token *tok, MacroArg *args) { // subst: substitute
     while (tok->kind != TK_EOF) {
         Token *arg = find_arg(args, tok);
 
-        if (!arg) {
-            cur = cur->next = copy_token(tok);
+        // If the current token is a macro parameter, replaces
+        // it with actuals.
+        if (arg) {
             tok = tok->next;
+
+            // x##y becomes y if x is the empty argument list.
+            if (arg == EMPTY && equal(tok, "##")) {
+                tok = tok->next;
+                continue;
+            }
+
+            if (arg != EMPTY)
+                for (Token *t = arg; t; t = t->next)
+                    cur = cur->next = copy_token(t);
             continue;
         }
 
-        tok = tok->next;
+        // Replace x##y with xy. LHS has already been macro-expanded and
+        // added to `cur`.
+        if (equal(tok, "##")) {
+            tok = tok->next;
+            Token *rhs = find_arg(args, tok);
 
-        if (arg == EMPTY)
+            if (!rhs) {
+                *cur = *paste(cur, tok);
+                tok = tok->next;
+                continue;
+            }
+
+            tok = tok->next;
+
+            // x##y becomes x if y is the empty argument list.
+            if (rhs == EMPTY)
+                continue;
+            
+            *cur = *paste(cur, rhs);
+            for (Token *t = rhs->next; t; t = t->next)
+                cur = cur->next = copy_token(t);
             continue;
+        }
 
-        for (Token *t = arg; t; t = t->next)
-            cur = cur->next = copy_token(t);
+        // "#" followed by a parameter is replaced with stringized actuals.
+        if (equal(tok, "#")) {
+            Token *arg = find_arg(args, tok->next);
+            if (arg) {
+                cur = cur->next = stringize(tok, arg);
+                tok = tok->next->next;
+                continue;
+            }
+        }
+
+        // Handle non-macro token.
+        cur = cur->next = copy_token(tok);
+        tok = tok->next;
+        continue;
     }
 
     return head.next;
@@ -377,20 +575,32 @@ static bool expand_macro(Token **rest, Token *tok) {
 
     // Object-like macro application
     if (m->is_objlike) {
+        if (m == file_macro) {
+            *rest = new_str_token(tok->filename, tok);
+            (*rest)->next = tok->next;
+            return true;
+        }
+
+        if (m == line_macro) {
+            *rest = new_num_token(tok->line_no, tok);
+            (*rest)->next = tok->next;
+            return true;
+        }
+        
         Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
         Token *body = add_hideset(m->body, hs);
         *rest = append(body, tok->next);
         return true;
     }
 
-    // If a funclike macro token is not followed an argument list,
+    // If a funclike macro token is not followed by an argument list,
     // treat it as a normal identifier.
     if (!equal(tok->next, "("))
         return false;
     
     // Function-like macro application
     Token *macro_token = tok;
-    MacroArg *args = read_macro_args(&tok, tok, m->params);
+    MacroArg *args = read_macro_args(&tok, tok, m->params, m->is_variadic);
     Token *rparen = tok; // right parenthsis
 
     // Tokens that consist a func-like macro invocation may have different
@@ -407,7 +617,75 @@ static bool expand_macro(Token **rest, Token *tok) {
     return true;
 }
 
-// Visit all tokens in `tok` while evaluating reprocessing
+// Returns a new string "dir/file".
+static char *join_paths(char *dir, char *file) {
+    char *buf = malloc(strlen(dir) + strlen(file) + 2); // add 2 for '/' and '\0'
+    sprintf(buf, "%s/%s", dir, file);
+    return buf;
+}
+
+// Returns true if a given file exists.
+static bool file_exists(char *path) {
+    struct stat st;
+    return !stat(path, &st);
+}
+
+static char *search_include_paths(char *filename, Token *start) {
+    // Search a file from the include paths.
+    for (char **p = include_paths; *p; p++) {
+        char *path = join_paths(*p, filename);
+        if (file_exists(path))
+            return path;
+    }
+    error_tok(start, "'%s': file not found", filename);
+}
+
+// Read an #include argument.
+static char *read_include_path(Token **rest, Token *tok) {
+    // Pattern 1: #include "foo.h"
+    if (tok->kind == TK_STR) {
+        // A double-quoted filename for #include is a special kind of
+        // token, and we don't want to interpret any escape sequences in it.
+        // For example, "\f" in "C:\foo" is not a formfeed character but
+        // just two non-control characters, backslash and f.
+        // So we don't want to use token->contents.
+        Token *start = tok;
+        char *filename = strndup(tok->loc + 1, tok->len - 2);
+        *rest = skip_line(tok->next);
+
+        if (file_exists(filename))
+            return filename;
+        return search_include_paths(filename, start);
+    }
+
+    // Pattern 2: #include <foo.h>
+    if (equal(tok, "<")) {
+        // Reconstruct a filename from a sequence of tokens between
+        // "<" and ">".
+        Token *start = tok;
+        
+        // Find closing ">".
+        for (; !equal(tok, ">"); tok = tok->next)
+            if (tok->kind == TK_EOF)
+                error_tok(tok, "expected '>'");
+        
+        char *filename = join_tokens(start->next, tok); // this `tok` is `>`
+        *rest = skip_line(tok->next);
+        return search_include_paths(filename, start);
+    }
+
+    // Pattern 3: #include FOO
+    // In this case FOO must be macro-expanded to either
+    // a single string token or a sequence of "<" ... ">".
+    if (tok->kind == TK_IDENT) {
+        Token *tok2 = preprocess(copy_line(rest, tok));
+        return read_include_path(&tok2, tok2);
+    }
+
+    error_tok(tok, "expected a filename");
+}
+
+// Visit all tokens in `tok` while evaluating preprocessing
 // macros and directives.
 static Token *preprocess2(Token *tok) {
     Token head = {};
@@ -418,7 +696,7 @@ static Token *preprocess2(Token *tok) {
         if (expand_macro(&tok, tok))
             continue;
 
-        // Pass through if it is not a "#"
+        // Pass through if it is not a "#".
         if (!is_hash(tok)) {
             cur = cur->next = tok;
             tok = tok->next;
@@ -429,17 +707,11 @@ static Token *preprocess2(Token *tok) {
         tok = tok->next;
 
         if (equal(tok, "include")) {
-            tok = tok->next;
-
-            if (tok->kind != TK_STR)
-                error_tok(tok, "expected a filename");
-
-            char *path = tok->contents; // TK_STR must have contents
+            char *path = read_include_path(&tok, tok->next);
             Token *tok2 = tokenize_file(path);
             if (!tok2)
                 error_tok(tok, "%s", strerror(errno));
-            tok = skip_line(tok->next);
-            tok = append(tok2, tok->next);
+            tok = append(tok2, tok);
             continue;
         }
 
@@ -517,6 +789,9 @@ static Token *preprocess2(Token *tok) {
             continue;
         }
 
+        if (equal(tok, "error"))
+            error_tok(tok, "");
+
         // `#`-only line is legal. It's called a null directive.
         if (tok->at_bol) // Do nothing, and go to top of the while block.
             continue;
@@ -528,11 +803,87 @@ static Token *preprocess2(Token *tok) {
     return head.next;
 }
 
+void define_macro(char *name, char *buf) {
+    Token *tok = tokenize("(internal)", 1, buf);
+    add_macro(name, true, tok);
+}
+
+void init_macros(void) {
+    // Define predefined macros
+    define_macro("__zcc__", "1");
+    define_macro("_LP64", "1");
+    define_macro("__ELF__", "1");
+    define_macro("__LP64__", "1");
+    define_macro("__SIZEOF_DOUBLE__", "8");
+    define_macro("__SIZEOF_FLOAT__", "4");
+    define_macro("__SIZEOF_INT__", "4");
+    define_macro("__SIZEOF_LONG_DOUBLE__", "8");
+    define_macro("__SIZEOF_LONG_LONG__", "8");
+    define_macro("__SIZEOF_LONG__", "8");
+    define_macro("__SIZEOF_POINTER__", "8");
+    define_macro("__SIZEOF_PTRDIFF_T__", "8");
+    define_macro("__SIZEOF_SHORT__", "2");
+    define_macro("__SIZEOF_SIZE_T__", "8");
+    define_macro("__STDC_HOSTED__", "1");
+    define_macro("__STDC_ISO_10646__", "201103L");
+    define_macro("__STDC_NO_ATOMICS__", "1");
+    define_macro("__STDC_NO_COMPLEX__", "1");
+    define_macro("__STDC_NO_THREADS__", "1");
+    define_macro("__STDC_NO_VLA__", "1");
+    define_macro("__STDC_UTF_16__", "1");
+    define_macro("__STDC_UTF_32__", "1");
+    define_macro("__STDC_VERSION__", "201112L");
+    define_macro("__STDC__", "1");
+    define_macro("__amd64", "1");
+    define_macro("__amd64__", "1");
+    define_macro("__gnu_linux__", "1");
+    define_macro("__linux", "1");
+    define_macro("__linux__", "1");
+    define_macro("__unix", "1");
+    define_macro("__unix__", "1");
+    define_macro("__x86_64", "1");
+    define_macro("__x86_64__", "1");
+    define_macro("linux", "1");
+    define_macro("__alignof__", "alignof");
+    define_macro("__const__", "const");
+    define_macro("__inline__", "inline");
+    define_macro("__restrict", "restrict");
+    define_macro("__restrict__", "restrict");
+    define_macro("__signed__", "signed");
+    define_macro("__typeof__", "typeof");
+    define_macro("__volatile__", "volatile");
+
+    file_macro = add_macro("__FILE__", true, NULL);
+    line_macro = add_macro("__LINE__", true, NULL);
+}
+
+// Concatenate two string literals. e.g. "foo" "bar" => "foobar"
+static Token *join_strings(Token *t1, Token *t2) { // t1->len = 5, t2->len = 5
+    char *buf = malloc(t1->len + t2->len - 1); // sizeof (t1->len + t2->len - 1) = 9
+    sprintf(buf, "%.*s%.*s", t1->len - 1, t1->loc, t2->len - 1, t2->loc + 1); //t1->loc = ["]foo", (t2->loc + 1) = "[b]ar"
+    return tokenize(t1->filename, t1->file_no, buf); // buf = '"' 'f' 'o' 'o' 'b' 'a' 'r' '"' '\0'
+}
+
+// Concatenate adjacent string literals into a single string literal
+// as per the C spec.
+static void join_adjacent_string_literals(Token *tok) {
+    while (tok) {
+        if (tok->kind == TK_STR && tok->next && tok->next->kind == TK_STR) {
+            Token *next = tok->next->next;
+            *tok = *join_strings(tok, tok->next);
+            tok->next = next;
+        } else {
+            tok = tok->next;
+        }
+    }
+}
+
 // Entry point function of the preprocessor.
 Token *preprocess(Token *tok) {
     tok = preprocess2(tok);
     if (cond_incl)
         error_tok(cond_incl->tok, "unterminated conditional directive");
-    convert_keywords(tok);
+    convert_pp_tokens(tok);
+    join_adjacent_string_literals(tok);
     return tok;
 }
