@@ -26,4 +26,4 @@ zcc codegen.c
 zcc tokenize.c
 zcc preprocess.c
 
-(cd $TMP; gcc -static -o ../$OUTPUT *.o)
+(cd $TMP; gcc -o ../$OUTPUT *.o)

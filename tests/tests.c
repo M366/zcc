@@ -48,6 +48,8 @@ char *g34 = {"foo"};
 float g40 = 1.5;
 double g41 = 0.0 ? 55 : (0, 1 + 1 * 5.0 / 2 * (double)2 * (int)2.0);
 
+int Σ = 18;
+
 struct {
   char a;
   int b : 5;
@@ -1572,6 +1574,13 @@ of(char), \
   assert(4, sizeof(struct {int a:3; int c:1; int c:5;}), "sizeof(struct {int a:3; int c:1; int c:5;})");
   assert(8, sizeof(struct {int a:3; int:0; int c:5;}), "sizeof(struct {int a:3; int:0; int c:5;})");
   assert(4, sizeof(struct {int a:3; int:0;}), "sizeof(struct {int a:3; int:0;})");
+
+  assert(18, Σ, "Σ");
+  assert(3, ({ int β=3; β; }), "({ int β=3; β; })");
+  assert(3, ({ int あ=3; あ; }), "({ int あ=3; あ; })");
+  assert(0, strcmp("日本語", "\u65E5\u672C\u8A9E"), "strcmp(\"日本語\", \"\\u65E5\\u672C\\u8A9E\")");
+  assert(0, strcmp("日本語", "\U000065E5\U0000672C\U00008A9E"), "strcmp(\"日本語\", \"\\U000065E5\\U0000672C\\U00008A9E\")");
+  assert(0, strcmp("😀", "\U0001f600"), "strcmp(\"😀\", \"\\U0001f600\")");
 
   printf("OK\n");
   return 0;
