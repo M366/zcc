@@ -281,8 +281,11 @@ static void gen_expr(Node *node) {
         Member *mem = node->member;
         if (mem->is_bitfield) {
             printf("  shl %s, %d\n", reg(top - 1), 64 - mem->bit_width - mem->bit_offset); // delete the upper bits over the member.
-            printf("  shr %s, %d\n", reg(top - 1), 64 - mem->bit_width); // delete the lower bits under the member.
-        } // In the end, reg(top - 1) has value of the member.
+            if (mem->ty->is_unsigned)
+                printf("  shr %s, %d\n", reg(top - 1), 64 - mem->bit_width); // delete the lower bits under the member.
+            else
+                printf("  sar %s, %d\n", reg(top - 1), 64 - mem->bit_width); // delete the lower bits under the member.
+        } // reg(top - 1) has value of the member.
         return;
     }
     case ND_DEREF:

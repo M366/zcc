@@ -483,26 +483,32 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
             ty = ty_bool;
             break;
         case CHAR:
-        case SIGNED + CHAR:
             ty = ty_char;
+            break;
+        case SIGNED + CHAR:
+            ty = ty_schar;
             break;
         case UNSIGNED + CHAR:
             ty = ty_uchar;
             break;
         case SHORT:
         case SHORT + INT:
+            ty = ty_short;
+            break;
         case SIGNED + SHORT:
         case SIGNED + SHORT + INT:
-            ty = ty_short;
+            ty = ty_sshort;
             break;
         case UNSIGNED + SHORT:
         case UNSIGNED + SHORT + INT:
             ty = ty_ushort;
             break;
         case INT:
+            ty = ty_int;
+            break;
         case SIGNED:
         case SIGNED + INT:
-            ty = ty_int;
+            ty = ty_sint;
             break;
         case UNSIGNED:
         case UNSIGNED + INT:
@@ -512,11 +518,13 @@ static Type *typespec(Token **rest, Token *tok, VarAttr *attr) {
         case LONG + INT:
         case LONG + LONG:
         case LONG + LONG + INT:
+            ty = ty_long;
+            break;
         case SIGNED + LONG:
         case SIGNED + LONG + INT:
         case SIGNED + LONG + LONG:
         case SIGNED + LONG + LONG + INT:
-            ty = ty_long;
+            ty = ty_slong;
             break;
         case UNSIGNED + LONG:
         case UNSIGNED + LONG + INT:
@@ -1752,7 +1760,7 @@ static Node *compound_literal(Token **rest, Token *tok, Type *ty, Token *start) 
 
     Var *var = new_lvar(new_gvar_name(), ty);
     Node *lhs = lvar_initializer(rest, tok, var);
-    Node *rhs = new_var_node(var, tok); // In the end, rhs has compound-literal object.
+    Node *rhs = new_var_node(var, tok); // rhs has compound-literal object.
     return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
@@ -1832,6 +1840,13 @@ static Member *struct_members(Token **rest, Token *tok) {
             if (consume(&tok, tok, ":")) {
                 mem->is_bitfield = true;
                 mem->bit_width = const_expr(&tok, tok);
+
+                // Unlike other variables, bitfields are unsigned by default
+                // as per the x86-64 psABI spec.
+                if (!mem->ty->is_signed) {
+                    mem->ty = copy_type(mem->ty);
+                    mem->ty->is_unsigned = true;
+                }
             }
 
             cur = cur->next = mem;
