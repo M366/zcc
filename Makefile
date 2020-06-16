@@ -39,7 +39,12 @@ test-all: test test-nopic test-stage2 test-stage3
 
 queen: zcc $(TMPFS)
 	./zcc tests/nqueen.c > $(TMPFS)/tmp.s
-	gcc -static -o $(TMPFS)/tmp $(TMPFS)/tmp.s
+	gcc -o $(TMPFS)/tmp $(TMPFS)/tmp.s
+	$(TMPFS)/tmp
+
+uqueen: zcc $(TMPFS)
+	./zcc tests/nqueen_utf8.c > $(TMPFS)/tmp.s
+	gcc -o $(TMPFS)/tmp $(TMPFS)/tmp.s
 	$(TMPFS)/tmp
 
 clean:
